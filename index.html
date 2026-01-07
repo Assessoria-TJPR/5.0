@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simba-JUD - Análise de Admissibilidade</title>
+    <meta
+      name="description"
+      content="Portal de triagem recursal para checagem de tempestividade, preparo e observações automatizadas."
+    />
+    <meta name="theme-color" content="#f8fafc" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;600;700&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --ink: #0f172a;
+        --ink-muted: #475569;
+        --accent: #f97316;
+        --accent-strong: #ea580c;
+        --accent-cool: #14b8a6;
+        --paper: #f8fafc;
+        --panel: #ffffff;
+        --line: #e2e8f0;
+      }
+      body {
+        font-family: 'Space Grotesk', 'Segoe UI', sans-serif;
+        color: var(--ink);
+        background: var(--paper);
+        text-rendering: optimizeLegibility;
+      }
+      .font-display {
+        font-family: 'Fraunces', 'Times New Roman', serif;
+      }
+      button:focus-visible {
+        outline: 3px solid rgba(249, 115, 22, 0.35);
+        outline-offset: 2px;
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #94a3b8;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b;
+      }
+      .animate-fade-in {
+        animation: fadeIn 0.5s ease-in-out;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+    </style>
+</head>
+  <body class="bg-transparent text-slate-900 min-h-screen antialiased">
+    <div id="root" class="h-full"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

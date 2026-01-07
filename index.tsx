@@ -1,0 +1,2234 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
+  FileText,
+  ClipboardList,
+  Calendar,
+  ShieldAlert,
+  ArrowRight,
+} from 'lucide-react';
+import { feriadosISO, prorrogsISO, stjRates, stfRates, funjusRates, ValorData } from './triario-data';
+import simbaLogo from './Dados/WhatsApp Image 2025-12-16 at 16.54.26.jpeg';
+
+type YesNo = 'sim' | 'não' | '';
+type TipoRecurso = 'Especial' | 'Extraordinário' | '';
+type Multa = 'não' | 'sim, recolhida' | 'sim, não recolhida' | '';
+type Gratuidade =
+  | 'não invocada'
+  | 'já é ou afirma ser beneficiário'
+  | 'requer no recurso em análise'
+  | 'é o próprio objeto do recurso'
+  | 'presumida (defensor público, dativo ou NPJ)'
+  | '';
+type Subscritor =
+  | 'advogado particular'
+  | 'procurador público'
+  | 'procurador nomeado'
+  | 'advogado em causa própria'
+  | '';
+type Contrarrazoes = 'apresentadas' | 'ausente alguma' | 'ausentes' | '';
+type MPTeor = 'mera ciência' | 'pela admissão' | 'pela inadmissão' | 'ausência de interesse' | '';
+type CamaraArea = 'Cível' | 'Crime' | 'ECA' | '';
+type ParcialOpcao = '' | 'não' | 'JG parcial' | 'COHAB Londrina' | 'outros';
+
+type TriagemState = {
+  tipo: TipoRecurso;
+  acordo: YesNo;
+  valido: YesNo;
+  desist: YesNo;
+  valida: YesNo;
+  sigla: string;
+  interp: string;
+  decrec: 'colegiada/acórdão' | 'monocrática/singular' | '';
+  camara: string;
+  camaraArea: CamaraArea;
+  camaraNumero: string;
+  emaberto: YesNo;
+  envio: string;
+  consulta: YesNo;
+  leitura: string;
+  emdobro: 'simples' | 'em dobro' | '';
+  multa: Multa;
+  motivo: 'Fazenda Pública ou justiça gratuita' | 'é o próprio objeto do recurso' | 'não identificado' | '';
+  dispensa: YesNo;
+  gratuidade: Gratuidade;
+  deferida: YesNo;
+  movdef: string;
+  requerida: YesNo;
+  movped: string;
+  atoincomp: YesNo;
+  comprova:
+    | 'no prazo para interposição do recurso'
+    | 'no dia útil seguinte ao término do prazo'
+    | 'posteriormente'
+    | 'ausente'
+    | '';
+  apos16: YesNo;
+  guiast: string;
+  compst: string;
+  valorst: string;
+  guiavinc: YesNo;
+  guia: YesNo;
+  guiamov: string;
+  guiorig: YesNo;
+  comp: YesNo;
+  compmov: string;
+  comptipo: 'de pagamento' | 'de agendamento' | '';
+  codbar: 'confere' | 'diverge ou guia ausente' | '';
+  valorfj: string;
+  parcialTipo: ParcialOpcao;
+  parcialOutro: string;
+  usarIntegral: boolean;
+  subscritor: Subscritor;
+  nomemovi: string;
+  movis: string;
+  cadeia: YesNo;
+  faltante: 'ao próprio subscritor' | 'a outro elo da cadeia' | '';
+  suspefeito: 'não requerido' | 'requerido no corpo do recurso' | 'requerido em petição apartada' | '';
+  autuado: YesNo;
+  exclusivi: 'requerida' | 'não requerida' | '';
+  cadastrada: YesNo;
+  regular: YesNo;
+  contrarra: Contrarrazoes;
+  contramovis: string;
+  intimado: YesNo;
+  intimovi: string;
+  crraberto: YesNo;
+  decursocrr: YesNo;
+  semadv: YesNo;
+  emepe: YesNo;
+  mani: YesNo;
+  teormani: MPTeor;
+  manimovis: string;
+  decursomp: YesNo;
+  remetido: YesNo;
+  anotacoes: string;
+};
+
+type StoredPayload = { __version: number; state: TriagemState };
+
+const STORAGE_KEY = 'triario_state_v2';
+const STORAGE_VERSION = 2;
+
+const initialState: TriagemState = {
+  tipo: '',
+  acordo: '',
+  valido: '',
+  desist: '',
+  valida: '',
+  sigla: '',
+  interp: '',
+  decrec: '',
+  camara: '',
+  camaraArea: '',
+  camaraNumero: '',
+  emaberto: '',
+  envio: '',
+  consulta: '',
+  leitura: '',
+  emdobro: '',
+  multa: '',
+  motivo: '',
+  dispensa: '',
+  gratuidade: '',
+  deferida: '',
+  movdef: '',
+  requerida: '',
+  movped: '',
+  atoincomp: '',
+  comprova: '',
+  apos16: '',
+  guiast: '',
+  compst: '',
+  valorst: '',
+  guiavinc: '',
+  guia: '',
+  guiamov: '',
+  guiorig: '',
+  comp: '',
+  compmov: '',
+  comptipo: '',
+  codbar: '',
+  valorfj: '',
+  parcialTipo: '',
+  parcialOutro: '',
+  usarIntegral: false,
+  subscritor: '',
+  nomemovi: '',
+  movis: '',
+  cadeia: '',
+  faltante: '',
+  suspefeito: '',
+  autuado: '',
+  exclusivi: '',
+  cadastrada: '',
+  regular: '',
+  contrarra: '',
+  contramovis: '',
+  intimado: '',
+  intimovi: '',
+  crraberto: '',
+  decursocrr: '',
+  semadv: '',
+  emepe: '',
+  mani: '',
+  teormani: '',
+  manimovis: '',
+  decursomp: '',
+  remetido: '',
+  anotacoes: '',
+};
+
+type Tempestividade = {
+  status: 'tempestivo' | 'intempestivo' | 'pendente';
+  intim?: Date;
+  comeco?: Date;
+  venc?: Date;
+  prazo?: number;
+  mensagem?: string;
+};
+
+type RateInfo = { value: number; start?: string };
+
+const toDate = (value: string) => new Date(`${value}T00:00:00`);
+const toDateKey = (date: Date) => {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+};
+const sortRates = (rates: ValorData[]) =>
+  [...rates].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+const stjRatesSorted = sortRates(stjRates);
+const stfRatesSorted = sortRates(stfRates);
+const funjusRatesSorted = sortRates(funjusRates);
+const feriadosSet = new Set(feriadosISO);
+const prorrogsSet = new Set(prorrogsISO);
+
+const toBusinessDate = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const addDays = (date: Date, days: number) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+};
+const isHoliday = (date: Date) => feriadosSet.has(toDateKey(date));
+const isProrrogacao = (date: Date) => prorrogsSet.has(toDateKey(date));
+
+const isBusinessDay = (date: Date) => {
+  const day = date.getDay();
+  if (day === 0 || day === 6) return false;
+  return !isHoliday(date);
+};
+
+const nextBusinessDay = (date: Date) => {
+  let current = toBusinessDate(date);
+  while (!isBusinessDay(current)) {
+    current = addDays(current, 1);
+  }
+  return current;
+};
+
+const pickRateInfo = (interp: Date | null, rates: ValorData[]): RateInfo => {
+  if (!interp) return { value: 0 };
+  let chosen: ValorData | undefined;
+  for (const rate of rates) {
+    if (interp >= toDate(rate.start)) {
+      chosen = rate;
+    } else {
+      break;
+    }
+  }
+  return chosen ? { value: chosen.value, start: chosen.start } : { value: 0 };
+};
+
+const formatDate = (date?: Date) => {
+  if (!date) return '—';
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}.${month}.${year}`;
+};
+
+const formatTime = (date?: Date) => {
+  if (!date) return '—';
+  return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatIsoDate = (value?: string) => (value ? formatDate(toDate(value)) : '—');
+
+const currencyFormatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+const formatCurrency = (value: number) =>
+  Number.isFinite(value) ? currencyFormatter.format(value) : 'R$ 0,00';
+
+const parseInputDate = (value: string) => {
+  if (!value) return null;
+  return new Date(`${value}T00:00:00`);
+};
+
+const computeTempestividade = (state: TriagemState): Tempestividade => {
+  const envio = parseInputDate(state.envio);
+  const interp = parseInputDate(state.interp);
+  if (!envio || !interp) {
+    return { status: 'pendente', mensagem: 'Preencha envio da intimação e interposição.' };
+  }
+  const prazo = state.emdobro === 'em dobro' ? 30 : 15;
+  const leitura = state.consulta === 'sim' ? parseInputDate(state.leitura) : null;
+  const auto = addDays(envio, 10);
+  const intimBase = leitura && leitura <= auto ? leitura : auto;
+  const intim = nextBusinessDay(intimBase);
+  let comeco = addDays(intim, 1);
+  while (!isBusinessDay(comeco) || isProrrogacao(comeco)) {
+    comeco = addDays(comeco, 1);
+  }
+  let venc = comeco;
+  const contagem: Date[] = [venc];
+  while (contagem.length < prazo) {
+    venc = addDays(venc, 1);
+    while (!isBusinessDay(venc)) {
+      venc = addDays(venc, 1);
+    }
+    contagem.push(venc);
+  }
+  while (isProrrogacao(venc) || !isBusinessDay(venc)) {
+    venc = addDays(venc, 1);
+  }
+  const status = interp <= venc ? 'tempestivo' : 'intempestivo';
+  return { status, intim, comeco, venc, prazo };
+};
+
+type Outputs = {
+  tempest: Tempestividade;
+  deverST: number;
+  deverFJ: number;
+  stLabel: string;
+  stRateStart?: string;
+  fjRateStart?: string;
+  controut: string;
+  mpout: string;
+  grout: string;
+  funjout: string;
+  procurout: string;
+  exclusout: string;
+  suspefout: string;
+  parcialout: string;
+  observacoes: string[];
+};
+
+const buildResumoText = (state: TriagemState, outputs: Outputs) => {
+  const safe = (v: string) => (v ? v : '—');
+  const lines: string[] = [
+    'Resumo - Portal de Triagem',
+    `Data: ${new Date().toLocaleString('pt-BR')}`,
+    `Sigla: ${safe(state.sigla)}`,
+    '',
+    `Tipo: ${safe(state.tipo)}`,
+    `Interposição: ${safe(state.interp)}`,
+    `Decisão recorrida: ${safe(state.decrec)}`,
+    `Câmara: ${safe(camaraLabel(state))}`,
+    '',
+    `Tempestivo: ${outputs.tempest.status}`,
+    `Intimação: ${formatDate(outputs.tempest.intim)}`,
+    `Começo do prazo: ${formatDate(outputs.tempest.comeco)}`,
+    `Prazo: ${outputs.tempest.prazo || '—'} dias`,
+    `Vencimento: ${formatDate(outputs.tempest.venc)}`,
+    '',
+    `GRU: ${outputs.grout}`,
+    `Funjus: ${outputs.funjout}`,
+    `Pagamento parcial: ${outputs.parcialout}`,
+    `Valores devidos - Tribunal Superior: ${formatCurrency(outputs.deverST)} | Funjus: ${formatCurrency(
+      outputs.deverFJ
+    )}`,
+    `Base de custas: ${outputs.stLabel} ${formatIsoDate(outputs.stRateStart)} | FUNJUS ${formatIsoDate(
+      outputs.fjRateStart
+    )}`,
+    '',
+    `Procuração/Nomeação: ${outputs.procurout}`,
+    `Exclusividade na intimação: ${outputs.exclusout}`,
+    `Efeito suspensivo: ${outputs.suspefout}`,
+    '',
+    `Contrarrazões: ${outputs.controut}`,
+    `Ministério Público: ${outputs.mpout}`,
+  ];
+  if (outputs.observacoes.length) {
+    lines.push('', 'Observações/Minutas:');
+    outputs.observacoes.forEach((obs, idx) => lines.push(`${idx + 1}. ${obs}`));
+  }
+  if (state.anotacoes.trim()) {
+    lines.push('', 'Notas manuais:', state.anotacoes.trim());
+  }
+  return lines.join('\n');
+};
+
+const buildGratuidadeOutput = (state: TriagemState) => {
+  if (state.dispensa === 'sim') {
+    return 'dispensado (CPC, art. 1.007, §1º)';
+  }
+  if (state.gratuidade === 'já é ou afirma ser beneficiário' && state.atoincomp !== 'sim') {
+    if (state.deferida === 'sim') return `justiça gratuita mov. ${state.movdef || '?'}`;
+    if (state.requerida === 'sim') return `justiça gratuita mov. ${state.movped || '?'}`;
+    return 'justiça gratuita requerida no recurso';
+  }
+  if (state.gratuidade === 'requer no recurso em análise') return 'justiça gratuita requerida no recurso';
+  if (state.gratuidade === 'é o próprio objeto do recurso') return 'justiça gratuita é o próprio objeto';
+  if (state.gratuidade === 'presumida (defensor público, dativo ou NPJ)') {
+    return 'justiça gratuita presumida (defensor público, dativo ou NPJ)';
+  }
+  return null;
+};
+
+const computeOutputs = (state: TriagemState): Outputs => {
+  const tempest = computeTempestividade(state);
+  const interpDate = parseInputDate(state.interp);
+  const stLabel =
+    state.tipo === 'Especial' ? 'STJ' : state.tipo === 'Extraordinário' ? 'STF' : 'Tribunal Superior';
+  const stRate =
+    state.tipo === 'Especial'
+      ? pickRateInfo(interpDate, stjRatesSorted)
+      : state.tipo === 'Extraordinário'
+      ? pickRateInfo(interpDate, stfRatesSorted)
+      : { value: 0 };
+  const funjusRate = pickRateInfo(interpDate, funjusRatesSorted);
+  const deverST = stRate.value;
+  const deverFJ = funjusRate.value;
+
+  const controut = (() => {
+    if (state.contrarra === 'apresentadas') {
+      return state.contramovis ? `mov(s). ${state.contramovis}` : 'apresentadas';
+    }
+    if (state.contrarra === 'ausente alguma') {
+      return state.contramovis ? `mov(s). ${state.contramovis}` : 'ausente alguma';
+    }
+    if (state.contrarra === 'ausentes') {
+      if (state.intimado === 'sim' && state.crraberto === 'não' && state.decursocrr === 'sim') return 'não';
+      if (state.intimado === 'não' && state.semadv === 'sim') return 'sem adv.';
+      return 'vide obs.';
+    }
+    return 'vide obs.';
+  })();
+
+  const mpout = (() => {
+    if (state.emepe === 'não') return 'N/A';
+    if (state.mani === 'sim') {
+      const base = state.teormani || 'mera ciência';
+      return state.manimovis ? `${base}; mov. ${state.manimovis}` : base;
+    }
+    if (state.remetido === 'sim' && state.decursomp === 'sim') return 'deixou de se manifestar';
+    return 'vide obs.';
+  })();
+
+  const grout = (() => {
+    const shared = buildGratuidadeOutput(state);
+    if (shared) return shared;
+    const guiaInfo = state.guiast ? `guia mov. ${state.guiast}` : 'guia não localizada';
+    const compInfo = state.compst ? `comprovante mov. ${state.compst}` : 'comprovante não localizado';
+    return `${guiaInfo}; ${compInfo}`;
+  })();
+
+  const funjout = (() => {
+    const shared = buildGratuidadeOutput(state);
+    if (shared) return shared;
+    const guiaInfo = state.guia === 'sim' ? `guia mov. ${state.guiamov || '?'}` : 'guia não localizada';
+    const compInfo = state.comp === 'sim' ? `comprovante mov. ${state.compmov || '?'}` : 'comprovante não localizado';
+    return `${guiaInfo}; ${compInfo}`;
+  })();
+
+  const parcialout = (() => {
+    if (!state.parcialTipo || state.parcialTipo === 'não') return 'Não informado';
+    if (state.parcialTipo === 'outros') return state.parcialOutro ? `Parcial: ${state.parcialOutro}` : 'Parcial: outros (especificar)';
+    return `Parcial: ${state.parcialTipo}`;
+  })();
+
+  const procurout = (() => {
+    if (state.subscritor === 'procurador público' || state.subscritor === 'advogado em causa própria') {
+      return state.subscritor || 'N/A';
+    }
+    if (state.subscritor === 'procurador nomeado') {
+      return state.nomemovi ? `mov. ${state.nomemovi}` : 'nomeação não localizada';
+    }
+    if (state.subscritor === 'advogado particular' && state.movis) return `mov(s). ${state.movis}`;
+    if (state.subscritor === 'advogado particular') return 'movimentos não informados';
+    return 'N/A';
+  })();
+
+  const exclusout = (() => {
+    if (state.exclusivi === 'não requerida') return 'não requerida';
+    if (state.exclusivi === 'requerida' && state.cadastrada === 'sim') return 'requerida e já cadastrada';
+    if (state.exclusivi === 'requerida' && state.regular === 'sim') return 'requerida';
+    if (state.exclusivi === 'requerida' && state.regular === 'não') return 'requerida, mas sem poderes';
+    return 'N/A';
+  })();
+
+  const suspefout = (() => {
+    if (!state.suspefeito) return 'N/A';
+    if (state.suspefeito === 'requerido em petição apartada' && state.autuado === 'sim')
+      return 'requerido em petição apartada e autuado';
+    return state.suspefeito;
+  })();
+
+  const observacoes: string[] = [];
+  if (state.emaberto === 'sim') {
+    observacoes.push(
+      'Há prazo em aberto na Câmara de origem; sugere-se devolver para aguardar decurso.'
+    );
+  }
+  if (state.emaberto !== 'sim') {
+    if (state.contrarra !== 'apresentadas' && state.intimado === 'não' && state.semadv === 'não') {
+      observacoes.push('Determinar intimação do(s) recorrido(s) para contrarrazões.');
+    } else if (state.contrarra !== 'apresentadas' && state.intimado === 'sim' && state.crraberto === 'sim') {
+      observacoes.push('Prazo de contrarrazões em aberto; aguardar decurso.');
+    } else if (
+      state.contrarra !== 'apresentadas' &&
+      state.intimado === 'sim' &&
+      state.crraberto === 'não' &&
+      state.decursocrr === 'não'
+    ) {
+      observacoes.push('Determinar certificação do decurso do prazo para contrarrazões.');
+    }
+  }
+  if (
+    (state.emepe === 'sim' && state.mani === 'sim' && state.teormani === 'mera ciência' && state.decursomp === 'não') ||
+    (state.emepe === 'sim' && state.mani === 'não' && state.remetido === 'sim' && state.decursomp === 'não')
+  ) {
+    observacoes.push('Aguardar decurso do prazo para manifestação da PGJ.');
+  } else if (state.emepe === 'sim' && state.mani === 'não' && state.remetido === 'não') {
+    observacoes.push('Encaminhar autos à PGJ.');
+  }
+
+  const recodobro =
+    state.dispensa === 'não' &&
+    state.gratuidade === 'não invocada' &&
+    (state.comprova === 'ausente' ||
+      state.comprova === 'posteriormente' ||
+      (state.comprova === 'no dia útil seguinte ao término do prazo' && state.apos16 === 'não'));
+
+  const valorSTNum = Number(state.valorst || 0);
+  const valorFJNum = Number(state.valorfj || 0);
+
+  if (recodobro && (deverST || deverFJ)) {
+    observacoes.push(
+      `Caso de recolhimento em dobro; intimar para regularizar. Valores: Tribunal Superior ${formatCurrency(
+        deverST * 2
+      )}, FUNJUS ${formatCurrency(deverFJ * 2)}`
+    );
+  } else if (
+    state.dispensa === 'não' &&
+    state.gratuidade === 'já é ou afirma ser beneficiário' &&
+    state.atoincomp === 'sim'
+  ) {
+    observacoes.push(
+      `Ato incompatível com justiça gratuita; intimar para recolher preparo. Valores: Tribunal Superior ${formatCurrency(
+        deverST
+      )}, FUNJUS ${formatCurrency(deverFJ)}`
+    );
+  } else if (
+    state.dispensa === 'não' &&
+    (state.gratuidade === 'não invocada' || state.atoincomp === 'sim') &&
+    (valorSTNum < deverST || valorFJNum < deverFJ)
+  ) {
+    const parts = [];
+    if (valorSTNum < deverST) parts.push(`Tribunal Superior ${formatCurrency(deverST - valorSTNum)}`);
+    if (valorFJNum < deverFJ) parts.push(`Funjus ${formatCurrency(deverFJ - valorFJNum)}`);
+    if (parts.length) {
+      observacoes.push(`Complementar preparo: ${parts.join(' | ')}`);
+    }
+  }
+
+  if (state.subscritor === 'advogado particular' && state.cadeia === 'não') {
+    observacoes.push('Regularizar cadeia de procurações para o subscritor.');
+  } else if (state.subscritor === 'advogado particular' && state.cadeia === 'sim' && !state.movis) {
+    observacoes.push('Informar movimentos completos da cadeia de poderes.');
+  }
+  if (state.exclusivi === 'requerida' && state.cadastrada === 'não' && state.regular === 'sim') {
+    observacoes.push('Deferir pedido de exclusividade e cadastrar procurador nas partes.');
+  }
+  if (state.suspefeito === 'requerido em petição apartada' && state.autuado === 'não') {
+    observacoes.push('Autuar separadamente o pedido de efeito suspensivo.');
+  }
+
+  return {
+    tempest,
+    deverST,
+    deverFJ,
+    stLabel,
+    stRateStart: stRate.start,
+    fjRateStart: funjusRate.start,
+    controut,
+    mpout,
+    grout,
+    funjout,
+    procurout,
+    exclusout,
+    suspefout,
+    parcialout,
+    observacoes,
+  };
+};
+
+const camaraLabel = (state: TriagemState) => {
+  if (state.camaraArea && state.camaraNumero) {
+    return `${state.camaraArea} ${state.camaraNumero}`;
+  }
+  return state.camara || '—';
+};
+
+const buildConsequencias = (state: TriagemState, outputs: Outputs) => {
+  const list: string[] = [
+    `Tempestividade: ${outputs.tempest.status === 'tempestivo' ? 'prazo ok' : outputs.tempest.status === 'intempestivo' ? 'avaliar intempestividade' : 'preencha datas'}`,
+    `Preparo (ST/FJ): ${outputs.grout}`,
+    `Funjus: ${outputs.funjout}`,
+    `Pagamento parcial: ${outputs.parcialout}`,
+    `Contrarrazões: ${outputs.controut}`,
+    `Ministério Público: ${outputs.mpout}`,
+    `Representação: ${outputs.procurout}`,
+    `Exclusividade na intimação: ${outputs.exclusout}`,
+    `Efeito suspensivo: ${outputs.suspefout || 'N/A'}`,
+  ];
+  outputs.observacoes.forEach((obs) => list.push(obs));
+  return list;
+};
+
+type StepId = 'recurso' | 'dados' | 'tempest' | 'preparo' | 'processo' | 'resumo';
+
+type FieldErrors = Partial<Record<keyof TriagemState, boolean>>;
+
+const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors => {
+  const errors: FieldErrors = {};
+  const mark = (key: keyof TriagemState, condition: boolean) => {
+    if (condition) errors[key] = true;
+  };
+
+  mark('tipo', !state.tipo);
+  mark('acordo', state.acordo === '');
+  if (state.acordo === 'sim') mark('valido', !state.valido);
+  mark('desist', state.desist === '');
+  if (state.desist === 'sim') mark('valida', !state.valida);
+  mark('sigla', !state.sigla);
+
+  mark('interp', !state.interp);
+  mark('decrec', !state.decrec);
+  mark('camaraArea', !state.camaraArea);
+  mark('camaraNumero', !state.camaraNumero);
+  mark('emaberto', state.emaberto === '');
+
+  mark('envio', !state.envio);
+  mark('consulta', state.consulta === '');
+  if (state.consulta === 'sim') mark('leitura', !state.leitura);
+  mark('emdobro', !state.emdobro);
+  const envioDate = parseInputDate(state.envio);
+  const interpDate = parseInputDate(state.interp);
+  if (interpDate && envioDate && interpDate < envioDate) {
+    errors.envio = true;
+    errors.interp = true;
+  }
+
+  mark('multa', state.multa === '');
+  if (state.multa === 'sim, não recolhida') mark('motivo', !state.motivo);
+  mark('dispensa', state.dispensa === '');
+  mark('gratuidade', state.gratuidade === '');
+  if (state.gratuidade === 'já é ou afirma ser beneficiário') {
+    mark('deferida', state.deferida === '');
+    if (state.deferida === 'sim') mark('movdef', !state.movdef);
+    if (state.deferida === 'não') {
+      mark('requerida', state.requerida === '');
+      if (state.requerida === 'sim') mark('movped', !state.movped);
+    }
+    mark('atoincomp', state.atoincomp === '');
+  }
+  if (state.gratuidade === 'não invocada') {
+    mark('comprova', state.comprova === '');
+    if (state.comprova === 'no dia útil seguinte ao término do prazo') mark('apos16', state.apos16 === '');
+  }
+  if (state.guia === 'sim') mark('guiamov', !state.guiamov);
+  if (state.comp === 'sim') {
+    mark('compmov', !state.compmov);
+    mark('comptipo', !state.comptipo);
+    mark('codbar', !state.codbar);
+  }
+
+  mark('subscritor', !state.subscritor);
+  if (state.subscritor === 'procurador nomeado') mark('nomemovi', !state.nomemovi);
+  if (state.subscritor === 'advogado particular') {
+    mark('movis', !state.movis);
+    mark('cadeia', state.cadeia === '');
+    if (state.cadeia === 'não') mark('faltante', !state.faltante);
+  }
+  mark('suspefeito', state.suspefeito === '');
+  if (state.suspefeito === 'requerido em petição apartada') mark('autuado', state.autuado === '');
+  mark('exclusivi', state.exclusivi === '');
+  if (state.exclusivi === 'requerida') {
+    mark('cadastrada', state.cadastrada === '');
+    if (state.cadastrada === 'não') mark('regular', state.regular === '');
+  }
+
+  if (state.emaberto !== 'sim') {
+    mark('contrarra', state.contrarra === '');
+    if (state.contrarra !== 'apresentadas') {
+      mark('intimado', state.intimado === '');
+      if (state.intimado === 'sim') {
+        mark('crraberto', state.crraberto === '');
+        if (state.crraberto === 'não') mark('decursocrr', state.decursocrr === '');
+      } else if (state.intimado === 'não') {
+        mark('semadv', state.semadv === '');
+      }
+    }
+  }
+
+  mark('emepe', state.emepe === '');
+  if (state.emepe === 'sim') {
+    mark('mani', state.mani === '');
+    if (state.mani === 'sim') {
+      mark('teormani', state.teormani === '');
+      mark('manimovis', !state.manimovis);
+      if (state.teormani === 'mera ciência') mark('decursomp', state.decursomp === '');
+    } else if (state.mani === 'não') {
+      mark('remetido', state.remetido === '');
+      if (state.remetido === 'sim') mark('decursomp', state.decursomp === '');
+    }
+  }
+
+  return errors;
+};
+
+const steps: { id: StepId; label: string; icon: typeof FileText }[] = [
+  { id: 'recurso', label: 'Recurso', icon: FileText },
+  { id: 'dados', label: 'Dados iniciais', icon: Calendar },
+  { id: 'tempest', label: 'Tempestividade', icon: ClipboardList },
+  { id: 'preparo', label: 'Preparo e custas', icon: ShieldAlert },
+  { id: 'processo', label: 'Representação e pedidos', icon: AlertTriangle },
+  { id: 'resumo', label: 'Resumo', icon: CheckCircle2 },
+];
+
+const InputLabel = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <label className="flex flex-col gap-2 text-sm font-medium text-slate-600">
+    <span>{label}</span>
+    {children}
+  </label>
+);
+
+const SectionCard = ({ title, children }: { title: string; children: React.ReactNode }) => (
+  <div className="relative bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-42px_rgba(15,23,42,0.55)] overflow-hidden">
+    <div className="absolute inset-x-6 top-0 h-[2px] bg-gradient-to-r from-slate-900 via-amber-500 to-teal-500 opacity-80" />
+    <div className="absolute -right-12 -top-10 h-28 w-28 rounded-full bg-amber-200/30 blur-3xl" />
+    <div className="relative space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-semibold text-slate-900 font-display tracking-tight">{title}</h3>
+        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.22em]">Ficha</span>
+      </div>
+      <div className="grid gap-4">{children}</div>
+    </div>
+  </div>
+);
+
+const Pill = ({
+  children,
+  tone = 'neutral',
+}: {
+  children: React.ReactNode;
+  tone?: 'neutral' | 'success' | 'warning';
+}) => {
+  const tones = {
+    neutral: 'bg-white/80 border-slate-200 text-slate-700',
+    success: 'bg-emerald-50/90 border-emerald-200 text-emerald-800',
+    warning: 'bg-amber-50/90 border-amber-200 text-amber-800',
+  };
+  return (
+    <span
+      className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold shadow-sm ${tones[tone]}`}
+    >
+      {children}
+    </span>
+  );
+};
+
+const MetricCard = ({
+  label,
+  value,
+  helper,
+  tone = 'neutral',
+}: {
+  label: string;
+  value: string;
+  helper?: string;
+  tone?: 'neutral' | 'positive' | 'negative';
+}) => {
+  const tones = {
+    neutral: 'border-white/70 bg-white/85 text-slate-900 shadow-[0_16px_40px_-30px_rgba(15,23,42,0.45)]',
+    positive: 'border-emerald-200/80 bg-emerald-50/90 text-emerald-900 shadow-[0_18px_40px_-30px_rgba(16,185,129,0.35)]',
+    negative: 'border-amber-200/80 bg-amber-50/90 text-amber-900 shadow-[0_18px_40px_-30px_rgba(245,158,11,0.35)]',
+  };
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${tones[tone]}`}>
+      <p className="text-[11px] uppercase tracking-[0.24em] font-semibold text-slate-500">{label}</p>
+      <p className="text-lg font-semibold leading-tight mt-1">{value}</p>
+      {helper && <p className="text-xs mt-1 text-slate-600">{helper}</p>}
+    </div>
+  );
+};
+
+const StepChip = ({
+  label,
+  icon: Icon,
+  active,
+  onClick,
+}: {
+  label: string;
+  icon: typeof FileText;
+  active: boolean;
+  onClick: () => void;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-current={active ? 'step' : undefined}
+    className={`group inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition shadow-sm whitespace-nowrap ${
+      active
+        ? 'border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_-20px_rgba(15,23,42,0.6)]'
+        : 'border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 hover:shadow-md'
+    }`}
+  >
+    <Icon className={`h-4 w-4 ${active ? 'text-amber-200' : 'text-slate-500 group-hover:text-slate-700'}`} />
+    <span>{label}</span>
+  </button>
+);
+
+
+const App = () => {
+  const loadState = (): TriagemState => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return initialState;
+      const parsed = JSON.parse(raw) as Partial<StoredPayload & TriagemState>;
+      const stored = (parsed as StoredPayload).state || parsed;
+      const merged: TriagemState = { ...initialState, ...(stored as Partial<TriagemState>) };
+      if (!merged.parcialTipo && (stored as any)?.parcial) {
+        const legacy = (stored as any).parcial as YesNo;
+        merged.parcialTipo = legacy === 'sim' ? 'COHAB Londrina' : legacy === 'não' ? 'não' : '';
+      }
+      if (merged.usarIntegral === undefined) merged.usarIntegral = false;
+      if (parsed && (parsed as StoredPayload).__version && (parsed as StoredPayload).__version !== STORAGE_VERSION) {
+        return merged;
+      }
+      return merged;
+    } catch {
+      return initialState;
+    }
+  };
+
+  const [state, setState] = useState<TriagemState>(() => loadState());
+  const [step, setStep] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const [copiedCons, setCopiedCons] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null);
+
+  const outputs = useMemo(() => computeOutputs(state), [state]);
+  const summaryText = useMemo(() => buildResumoText(state, outputs), [state, outputs]);
+  const consequencias = useMemo(() => buildConsequencias(state, outputs), [state, outputs]);
+  const fieldErrors = useMemo(() => computeFieldErrors(state, outputs), [state, outputs]);
+
+  const handleChange = <K extends keyof TriagemState>(key: K, value: TriagemState[K]) => {
+    setState((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const inputClass = (key: keyof TriagemState, extra?: string) => {
+    const value = state[key];
+    const filled = typeof value === 'string' ? value.trim() !== '' : Boolean(value);
+    const hasError = Boolean(fieldErrors[key]);
+    const base = hasError ? 'input input-error' : filled ? 'input input-success' : 'input';
+    return extra ? `${base} ${extra}` : base;
+  };
+
+  useEffect(() => {
+    try {
+      const payload: StoredPayload = { __version: STORAGE_VERSION, state };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      setLastSavedAt(new Date());
+    } catch {
+      /* ignore */
+    }
+  }, [state]);
+
+  useEffect(() => {
+    if (!state.usarIntegral) return;
+    const targetValorST = outputs.deverST ? outputs.deverST.toFixed(2) : '';
+    const targetValorFJ = outputs.deverFJ ? outputs.deverFJ.toFixed(2) : '';
+    setState((prev) => {
+      if (!prev.usarIntegral) return prev;
+      if (prev.valorst === targetValorST && prev.valorfj === targetValorFJ) return prev;
+      return { ...prev, valorst: targetValorST, valorfj: targetValorFJ };
+    });
+  }, [state.usarIntegral, outputs.deverST, outputs.deverFJ]);
+
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    main.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
+  }, [step]);
+
+  const downloadResumo = () => {
+    const blob = new Blob([summaryText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `resumo-triagem-${state.sigla || 'triario'}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const copyText = async (text: string) => {
+    if (!text) return false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const copyResumo = async () => {
+    const ok = await copyText(summaryText);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } else {
+      setCopied(false);
+    }
+  };
+
+  const copyConsequencias = async () => {
+    const text = consequencias.join('\n');
+    const ok = await copyText(text);
+    if (ok) {
+      setCopiedCons(true);
+      setTimeout(() => setCopiedCons(false), 1500);
+    } else {
+      setCopiedCons(false);
+    }
+  };
+
+  const next = () => setStep((s) => Math.min(steps.length - 1, s + 1));
+  const prev = () => setStep((s) => Math.max(0, s - 1));
+  const clearStorage = () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    setState(initialState);
+    setStep(0);
+  };
+  const restart = () => {
+    clearStorage();
+  };
+  const confirmRestart = (message: string) => {
+    if (window.confirm(message)) restart();
+  };
+
+  const renderStep = () => {
+    const content = (() => {
+      switch (steps[step].id) {
+        case 'recurso':
+          return (
+            <div className="grid lg:grid-cols-2 gap-4">
+              <SectionCard title="Triar um novo recurso">
+                <div className="grid gap-4">
+                  <InputLabel label="Tipo">
+                    <select
+                      className={inputClass('tipo')}
+                      value={state.tipo}
+                      onChange={(e) => handleChange('tipo', e.target.value as TipoRecurso)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="Especial">Especial</option>
+                      <option value="Extraordinário">Extraordinário</option>
+                    </select>
+                  </InputLabel>
+                  <InputLabel label="Sigla para minutas">
+                    <input
+                      className={inputClass('sigla')}
+                      placeholder="AR-99"
+                      value={state.sigla}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        handleChange('sigla', value.replace(/^[aA][rR]/, 'AR'));
+                      }}
+                    />
+                  </InputLabel>
+                </div>
+                <div className="grid gap-4">
+                  <InputLabel label="Acordo">
+                    <select
+                      className={inputClass('acordo')}
+                      value={state.acordo}
+                      onChange={(e) => handleChange('acordo', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  {state.acordo === 'sim' && (
+                    <InputLabel label="Acordo válido?">
+                      <select
+                        className={inputClass('valido')}
+                        value={state.valido}
+                        onChange={(e) => handleChange('valido', e.target.value as YesNo)}
+                      >
+                        <option value="">Selecione</option>
+                        <option value="sim">Sim</option>
+                        <option value="não">Não</option>
+                      </select>
+                    </InputLabel>
+                  )}
+                </div>
+                <div className="grid gap-4">
+                  <InputLabel label="Desistência">
+                    <select
+                      className={inputClass('desist')}
+                      value={state.desist}
+                      onChange={(e) => handleChange('desist', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  {state.desist === 'sim' && (
+                    <InputLabel label="Desistência válida?">
+                      <select
+                        className={inputClass('valida')}
+                        value={state.valida}
+                        onChange={(e) => handleChange('valida', e.target.value as YesNo)}
+                      >
+                        <option value="">Selecione</option>
+                        <option value="sim">Sim</option>
+                        <option value="não">Não</option>
+                      </select>
+                    </InputLabel>
+                  )}
+                </div>
+              </SectionCard>
+              <SectionCard title="Ajuda rápida">
+                <ul className="space-y-2 text-sm text-slate-600">
+                  <li>
+                    <Pill>Importante</Pill> Confirme a validade de acordos e desistências antes de prosseguir.
+                  </li>
+                  <li>
+                    <Pill>Tipificação</Pill> “Especial” aplica tabela STJ; “Extraordinário” aplica tabela STF.
+                  </li>
+                  <li>
+                    <Pill>Sigla</Pill> Use o padrão interno (ex.: AR-130E+T) para a minuta/post-it.
+                  </li>
+                </ul>
+              </SectionCard>
+            </div>
+          );
+        case 'dados':
+          return (
+            <div className="grid lg:grid-cols-2 gap-4">
+              <SectionCard title="Dados iniciais">
+                <div className="grid gap-4">
+                  <InputLabel label="Interposição (data)">
+                    <input
+                      type="date"
+                      className={inputClass('interp')}
+                      value={state.interp}
+                      onChange={(e) => handleChange('interp', e.target.value)}
+                    />
+                  </InputLabel>
+                  <InputLabel label="Decisão recorrida">
+                    <select
+                      className={inputClass('decrec')}
+                      value={state.decrec}
+                      onChange={(e) =>
+                        handleChange('decrec', e.target.value as TriagemState['decrec'])
+                      }
+                    >
+                      <option value="">Selecione</option>
+                      <option value="colegiada/acórdão">colegiada/acórdão</option>
+                      <option value="monocrática/singular">Monocrática/singular</option>
+                    </select>
+                  </InputLabel>
+                </div>
+                <div className="grid gap-4">
+                  <InputLabel label="Câmara (ramo)">
+                    <select
+                      className={inputClass('camaraArea')}
+                      value={state.camaraArea}
+                      onChange={(e) => handleChange('camaraArea', e.target.value as CamaraArea)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="Cível">Cível</option>
+                      <option value="Crime">Crime</option>
+                      <option value="ECA">ECA</option>
+                    </select>
+                  </InputLabel>
+                  <InputLabel label="Número da Câmara">
+                    <input
+                      className={inputClass('camaraNumero')}
+                      type="number"
+                      min={1}
+                      placeholder="Ex.: 7"
+                      value={state.camaraNumero}
+                      onChange={(e) => handleChange('camaraNumero', e.target.value)}
+                    />
+                  </InputLabel>
+                  <InputLabel label="Prazo em aberto na origem?">
+                    <select
+                      className={inputClass('emaberto')}
+                      value={state.emaberto}
+                      onChange={(e) => handleChange('emaberto', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                </div>
+              </SectionCard>
+              <SectionCard title="Checklist rápido">
+                <ul className="space-y-2 text-sm text-slate-600">
+                  <li>• Se for decisão monocrática, o fluxo deve seguir até a etapa de custas.</li>
+                  <li>• “Prazo em aberto” ignora contrarrazões (serão tratadas depois).</li>
+                </ul>
+              </SectionCard>
+            </div>
+          );
+        case 'tempest':
+          return (
+            <div className="grid lg:grid-cols-2 gap-4">
+              <SectionCard title="Tempestividade">
+                <div className="grid gap-4">
+                  <InputLabel label="Envio (expedição) da intimação">
+                    <input
+                      type="date"
+                      className={inputClass('envio')}
+                      value={state.envio}
+                      onChange={(e) => handleChange('envio', e.target.value)}
+                    />
+                  </InputLabel>
+                  <InputLabel label="Consulta eletrônica (leitura)">
+                    <select
+                      className={inputClass('consulta')}
+                      value={state.consulta}
+                      onChange={(e) => handleChange('consulta', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  {state.consulta === 'sim' && (
+                    <InputLabel label="Data da leitura">
+                      <input
+                        type="date"
+                        className={inputClass('leitura')}
+                        value={state.leitura}
+                        onChange={(e) => handleChange('leitura', e.target.value)}
+                      />
+                    </InputLabel>
+                  )}
+                  <InputLabel label="Prazo">
+                    <select
+                      className={inputClass('emdobro')}
+                      value={state.emdobro}
+                      onChange={(e) => handleChange('emdobro', e.target.value as TriagemState['emdobro'])}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="simples">Simples (15 dias)</option>
+                      <option value="em dobro">Em dobro (30 dias)</option>
+                    </select>
+                  </InputLabel>
+                  <p className="md:col-span-2 text-xs text-slate-500">
+                    Use prazo em dobro apenas para Defensoria Pública, MP, NPJ ou advogado dativo.
+                  </p>
+                </div>
+                <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <p className="text-sm text-slate-600 mb-2">Resultado parcial</p>
+                  {outputs.tempest.status === 'pendente' ? (
+                    <div className="text-sm text-slate-500">{outputs.tempest.mensagem}</div>
+                  ) : (
+                    <div className="grid md:grid-cols-2 gap-2 text-sm text-slate-800">
+                      <div>
+                        <strong>Intimação:</strong> {formatDate(outputs.tempest.intim)}
+                      </div>
+                      <div>
+                        <strong>Começo do prazo:</strong> {formatDate(outputs.tempest.comeco)}
+                      </div>
+                      <div>
+                        <strong>Prazo:</strong> {outputs.tempest.prazo} dias
+                      </div>
+                      <div>
+                        <strong>Vencimento:</strong> {formatDate(outputs.tempest.venc)}
+                      </div>
+                      <div className="col-span-full flex items-center gap-2 text-sm">
+                        {outputs.tempest.status === 'tempestivo' ? (
+                          <CheckCircle2 className="w-4 h-4 text-green-600" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 text-amber-500" />
+                        )}
+                        <span className="font-semibold uppercase tracking-tight">
+                          {outputs.tempest.status}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </SectionCard>
+              <SectionCard title="Critérios usados">
+                <ul className="space-y-2 text-sm text-slate-600">
+                  <li>• Intimação presumida 10 dias após expedição (após vinculação no DJEN), salvo leitura antes disso.</li>
+                  <li>• Atenção ao calendário e às comprovações de feriado/prorrogação.</li>
+                  <li>• Prazo em dobro: apenas Defensoria Pública, MP, NPJ ou advogado dativo.</li>
+                </ul>
+              </SectionCard>
+            </div>
+          );
+        case 'preparo':
+          return (
+            <div className="grid lg:grid-cols-2 gap-4">
+              <SectionCard title="Preparo e custas">
+                <div className="grid gap-4">
+                  <InputLabel label="Multa por embargos protelatórios">
+                    <select
+                      className={inputClass('multa')}
+                      value={state.multa}
+                      onChange={(e) => handleChange('multa', e.target.value as Multa)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="não">Não</option>
+                      <option value="sim, recolhida">Sim, recolhida</option>
+                      <option value="sim, não recolhida">Sim, não recolhida</option>
+                    </select>
+                  </InputLabel>
+                  {state.multa === 'sim, não recolhida' && (
+                    <InputLabel label="Motivo">
+                      <select
+                        className={inputClass('motivo')}
+                        value={state.motivo}
+                        onChange={(e) =>
+                          handleChange('motivo', e.target.value as TriagemState['motivo'])
+                        }
+                      >
+                        <option value="">Selecione</option>
+                        <option value="Fazenda Pública ou justiça gratuita">Fazenda Pública ou justiça gratuita</option>
+                        <option value="é o próprio objeto do recurso">É o próprio objeto do recurso</option>
+                        <option value="não identificado">Não identificado</option>
+                      </select>
+                    </InputLabel>
+                  )}
+                  <InputLabel label="Dispensa (MP/ente público/autarquia)">
+                    <select
+                      className={inputClass('dispensa')}
+                      value={state.dispensa}
+                      onChange={(e) => handleChange('dispensa', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  <InputLabel label="Justiça gratuita">
+                    <select
+                      className={inputClass('gratuidade')}
+                      value={state.gratuidade}
+                      onChange={(e) =>
+                        handleChange('gratuidade', e.target.value as TriagemState['gratuidade'])
+                      }
+                    >
+                      <option value="">Selecione</option>
+                      <option value="não invocada">Não invocada</option>
+                      <option value="já é ou afirma ser beneficiário">Já é ou afirma ser beneficiário</option>
+                      <option value="requer no recurso em análise">Requer no recurso em análise</option>
+                      <option value="é o próprio objeto do recurso">É o próprio objeto do recurso</option>
+                      <option value="presumida (defensor público, dativo ou NPJ)">
+                        Presumida (defensor público, dativo ou NPJ)
+                      </option>
+                    </select>
+                  </InputLabel>
+                  {state.gratuidade === 'já é ou afirma ser beneficiário' && (
+                    <>
+                      <InputLabel label="Deferida expressamente?">
+                        <select
+                          className={inputClass('deferida')}
+                          value={state.deferida}
+                          onChange={(e) => handleChange('deferida', e.target.value as YesNo)}
+                        >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                      {state.deferida === 'sim' && (
+                        <InputLabel label="Movimento (deferimento)">
+                          <input
+                            className={inputClass('movdef')}
+                            placeholder="Ex.: 9.1"
+                            value={state.movdef}
+                            onChange={(e) => handleChange('movdef', e.target.value)}
+                          />
+                        </InputLabel>
+                      )}
+                      {state.deferida === 'não' && (
+                        <>
+                          <InputLabel label="Requerida anteriormente?">
+                            <select
+                              className={inputClass('requerida')}
+                              value={state.requerida}
+                              onChange={(e) => handleChange('requerida', e.target.value as YesNo)}
+                            >
+                              <option value="">Selecione</option>
+                              <option value="sim">Sim</option>
+                              <option value="não">Não</option>
+                            </select>
+                          </InputLabel>
+                          {state.requerida === 'sim' && (
+                            <InputLabel label="Movimento (pedido)">
+                              <input
+                                className={inputClass('movped')}
+                                placeholder="Ex.: 9.1"
+                                value={state.movped}
+                                onChange={(e) => handleChange('movped', e.target.value)}
+                              />
+                            </InputLabel>
+                          )}
+                        </>
+                      )}
+                      <InputLabel label="Ato incompatível (pagamento prévio)?">
+                        <select
+                          className={inputClass('atoincomp')}
+                          value={state.atoincomp}
+                          onChange={(e) => handleChange('atoincomp', e.target.value as YesNo)}
+                        >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                    </>
+                  )}
+                  {state.gratuidade === 'não invocada' && (
+                    <>
+                      <InputLabel label="Comprovação de preparo">
+                        <select
+                          className={inputClass('comprova')}
+                          value={state.comprova}
+                          onChange={(e) =>
+                            handleChange('comprova', e.target.value as TriagemState['comprova'])
+                          }
+                        >
+                          <option value="">Selecione</option>
+                          <option value="no prazo para interposição do recurso">
+                            No prazo para interposição do recurso
+                          </option>
+                          <option value="no dia útil seguinte ao término do prazo">
+                            No dia útil seguinte ao término do prazo
+                          </option>
+                          <option value="posteriormente">Posteriormente</option>
+                          <option value="ausente">Ausente</option>
+                        </select>
+                      </InputLabel>
+                      {state.comprova === 'no dia útil seguinte ao término do prazo' && (
+                        <InputLabel label="Recurso interposto no último dia, após as 16h?">
+                          <select
+                            className={inputClass('apos16')}
+                            value={state.apos16}
+                            onChange={(e) => handleChange('apos16', e.target.value as YesNo)}
+                          >
+                            <option value="">Selecione</option>
+                            <option value="sim">Sim</option>
+                            <option value="não">Não</option>
+                          </select>
+                        </InputLabel>
+                      )}
+                    </>
+                  )}
+                </div>
+              </SectionCard>
+              <SectionCard title="Documentos e valores">
+                <div className="grid gap-4">
+                  <InputLabel label="Guia (Tribunal Superior) mov.">
+                    <input
+                      className={inputClass('guiast')}
+                      placeholder="Ex.: 1.2"
+                      value={state.guiast}
+                      onChange={(e) => handleChange('guiast', e.target.value)}
+                    />
+                  </InputLabel>
+                  <InputLabel label="Comprovante (Tribunal Superior) mov.">
+                    <input
+                      className={inputClass('compst')}
+                      placeholder="Ex.: 1.3"
+                      value={state.compst}
+                      onChange={(e) => handleChange('compst', e.target.value)}
+                    />
+                  </InputLabel>
+                  <div className="md:col-span-2">
+                    <InputLabel label="Valor pago ST/FJ">
+                      <div className="flex items-center gap-2 text-xs text-slate-600 mb-2">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+                          checked={state.usarIntegral}
+                          onChange={(e) => handleChange('usarIntegral', e.target.checked)}
+                        />
+                        <span>Usar valor integral devido (preenche automático)</span>
+                      </div>
+                      <div className="grid gap-2">
+                        <input
+                          className={inputClass('valorst')}
+                          type="number"
+                          step="0.01"
+                          placeholder="STJ/STF"
+                          value={state.valorst}
+                          onChange={(e) => handleChange('valorst', e.target.value)}
+                        />
+                        <input
+                          className={inputClass('valorfj')}
+                          type="number"
+                          step="0.01"
+                          placeholder="Funjus"
+                          value={state.valorfj}
+                          onChange={(e) => handleChange('valorfj', e.target.value)}
+                        />
+                      </div>
+                    </InputLabel>
+                  </div>
+                  <InputLabel label="Juntou guia (Funjus)?">
+                    <select
+                      className={inputClass('guia')}
+                      value={state.guia}
+                      onChange={(e) => handleChange('guia', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  {state.guia === 'sim' && (
+                    <>
+                      <InputLabel label="Movimento (guia)">
+                        <input
+                          className={inputClass('guiamov')}
+                          placeholder="Ex.: 1.4"
+                          value={state.guiamov}
+                          onChange={(e) => handleChange('guiamov', e.target.value)}
+                        />
+                      </InputLabel>
+                      <InputLabel label="Guia original para o recurso?">
+                        <select
+                          className={inputClass('guiorig')}
+                          value={state.guiorig}
+                          onChange={(e) => handleChange('guiorig', e.target.value as YesNo)}
+                        >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                    </>
+                  )}
+                  <InputLabel label="Juntou comprovante?">
+                    <select
+                      className={inputClass('comp')}
+                      value={state.comp}
+                      onChange={(e) => handleChange('comp', e.target.value as YesNo)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  {state.comp === 'sim' && (
+                    <>
+                      <InputLabel label="Movimento (comprovante)">
+                        <input
+                          className={inputClass('compmov')}
+                          placeholder="Ex.: 1.5"
+                          value={state.compmov}
+                          onChange={(e) => handleChange('compmov', e.target.value)}
+                        />
+                      </InputLabel>
+                      <InputLabel label="Tipo de comprovante">
+                        <select
+                          className={inputClass('comptipo')}
+                          value={state.comptipo}
+                          onChange={(e) =>
+                            handleChange('comptipo', e.target.value as TriagemState['comptipo'])
+                          }
+                        >
+                          <option value="">Selecione</option>
+                          <option value="de pagamento">De pagamento</option>
+                          <option value="de agendamento">De agendamento</option>
+                        </select>
+                      </InputLabel>
+                      <InputLabel label="Código de barras">
+                        <select
+                          className={inputClass('codbar')}
+                          value={state.codbar}
+                          onChange={(e) =>
+                            handleChange('codbar', e.target.value as TriagemState['codbar'])
+                          }
+                        >
+                          <option value="">Selecione</option>
+                          <option value="confere">Confere</option>
+                          <option value="diverge ou guia ausente">Diverge ou guia ausente</option>
+                        </select>
+                      </InputLabel>
+                    </>
+                  )}
+                  <div className="md:col-span-2">
+                    <InputLabel label="COHAB LD? (parcial Funjus)">
+                      <select
+                        className={inputClass('parcialTipo')}
+                        value={state.parcialTipo}
+                        onChange={(e) => handleChange('parcialTipo', e.target.value as ParcialOpcao)}
+                      >
+                        <option value="">Selecione</option>
+                        <option value="não">Não</option>
+                        <option value="JG parcial">JG parcial</option>
+                        <option value="COHAB Londrina">COHAB Londrina</option>
+                        <option value="outros">Outros (especificar)</option>
+                      </select>
+                    </InputLabel>
+                  </div>
+                  {state.parcialTipo === 'outros' && (
+                    <div className="md:col-span-2">
+                      <InputLabel label="Descrever pagamento parcial">
+                        <input
+                          className={inputClass('parcialOutro')}
+                          placeholder="Ex.: parcelamento, precatório, etc."
+                          value={state.parcialOutro}
+                          onChange={(e) => handleChange('parcialOutro', e.target.value)}
+                        />
+                      </InputLabel>
+                    </div>
+                  )}
+                </div>
+                {state.interp ? (
+                  <div className="mt-4 space-y-1 text-sm text-slate-600">
+                    <div>
+                      Valores devidos agora: Tribunal Superior {formatCurrency(outputs.deverST)} | FUNJUS{' '}
+                      {formatCurrency(outputs.deverFJ)}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      Base aplicada: {outputs.stLabel} {formatIsoDate(outputs.stRateStart)} | FUNJUS{' '}
+                      {formatIsoDate(outputs.fjRateStart)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-4 text-xs text-slate-500">
+                    Informe a data de interposição para calcular as custas automaticamente.
+                  </div>
+                )}
+              </SectionCard>
+              <SectionCard title="Notas práticas">
+                <ul className="space-y-2 text-sm text-slate-600">
+                  <li>• Marque “de agendamento” se o comprovante não tem autenticação.</li>
+                  <li>• Se houver ato incompatível com a gratuidade, o preparo será exigido.</li>
+                  <li>• Campos de movimento ajudam a gerar a minuta/post-it automaticamente.</li>
+                </ul>
+              </SectionCard>
+            </div>
+          );
+        case 'processo':
+          return (
+            <div className="grid lg:grid-cols-2 gap-4">
+              {state.emaberto === 'sim' && (
+                <div className="lg:col-span-2 rounded-2xl border border-slate-200/80 bg-white/80 text-slate-700 p-4 text-sm shadow-sm">
+                  Prazo em aberto na origem: contrarrazões podem ser tratadas depois. Preencha apenas se já houver dados.
+                </div>
+              )}
+              <SectionCard title="Representação">
+                <div className="grid gap-4">
+                  <InputLabel label="Subscritor">
+                    <select
+                      className={inputClass('subscritor')}
+                      value={state.subscritor}
+                      onChange={(e) => handleChange('subscritor', e.target.value as Subscritor)}
+                    >
+                      <option value="">Selecione</option>
+                      <option value="advogado particular">Advogado particular</option>
+                      <option value="procurador público">Procurador público</option>
+                      <option value="procurador nomeado">Procurador nomeado</option>
+                      <option value="advogado em causa própria">Advogado em causa própria</option>
+                    </select>
+                  </InputLabel>
+                  {state.subscritor === 'procurador nomeado' && (
+                    <InputLabel label="Movimento (nomeação)">
+                      <input
+                        className={inputClass('nomemovi')}
+                        placeholder="Ex.: 9.1"
+                        value={state.nomemovi}
+                        onChange={(e) => handleChange('nomemovi', e.target.value)}
+                      />
+                    </InputLabel>
+                  )}
+                  {state.subscritor === 'advogado particular' && (
+                    <>
+                    <InputLabel label="Movimentos (cadeia de poderes)">
+                      <input
+                        className={inputClass('movis')}
+                        placeholder="Ex.: 1.1; 9.1; via sistema"
+                        value={state.movis}
+                        onChange={(e) => handleChange('movis', e.target.value)}
+                      />
+                    </InputLabel>
+                    <InputLabel label="Cadeia completa?">
+                      <select
+                        className={inputClass('cadeia')}
+                        value={state.cadeia}
+                        onChange={(e) => handleChange('cadeia', e.target.value as YesNo)}
+                      >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                    {state.cadeia === 'não' && (
+                      <InputLabel label="Poderes faltantes">
+                        <select
+                          className={inputClass('faltante')}
+                          value={state.faltante}
+                          onChange={(e) =>
+                            handleChange('faltante', e.target.value as TriagemState['faltante'])
+                          }
+                          >
+                            <option value="">Selecione</option>
+                            <option value="ao próprio subscritor">Ao próprio subscritor</option>
+                            <option value="a outro elo da cadeia">A outro elo da cadeia</option>
+                          </select>
+                        </InputLabel>
+                      )}
+                    </>
+                  )}
+                </div>
+              </SectionCard>
+              <SectionCard title="Pedidos">
+                <div className="grid gap-4">
+                  <InputLabel label="Efeito suspensivo">
+                    <select
+                      className={inputClass('suspefeito')}
+                      value={state.suspefeito}
+                      onChange={(e) =>
+                        handleChange('suspefeito', e.target.value as TriagemState['suspefeito'])
+                      }
+                    >
+                      <option value="">Selecione</option>
+                      <option value="não requerido">Não requerido</option>
+                      <option value="requerido no corpo do recurso">Requerido no corpo do recurso</option>
+                      <option value="requerido em petição apartada">Requerido em petição apartada</option>
+                    </select>
+                  </InputLabel>
+                {state.suspefeito === 'requerido em petição apartada' && (
+                  <InputLabel label="Autuado?">
+                    <select
+                      className={inputClass('autuado')}
+                      value={state.autuado}
+                      onChange={(e) => handleChange('autuado', e.target.value as YesNo)}
+                    >
+                        <option value="">Selecione</option>
+                        <option value="sim">Sim</option>
+                        <option value="não">Não</option>
+                      </select>
+                    </InputLabel>
+                  )}
+                <InputLabel label="Exclusividade na intimação">
+                  <select
+                    className={inputClass('exclusivi')}
+                    value={state.exclusivi}
+                    onChange={(e) =>
+                      handleChange('exclusivi', e.target.value as TriagemState['exclusivi'])
+                    }
+                    >
+                      <option value="">Selecione</option>
+                      <option value="requerida">Requerida</option>
+                      <option value="não requerida">Não requerida</option>
+                    </select>
+                  </InputLabel>
+                  {state.exclusivi === 'requerida' && (
+                    <>
+                    <InputLabel label="Procurador já cadastrado?">
+                      <select
+                        className={inputClass('cadastrada')}
+                        value={state.cadastrada}
+                        onChange={(e) => handleChange('cadastrada', e.target.value as YesNo)}
+                      >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                    {state.cadastrada === 'não' && (
+                      <InputLabel label="Advogado regularmente constituído?">
+                        <select
+                          className={inputClass('regular')}
+                          value={state.regular}
+                          onChange={(e) => handleChange('regular', e.target.value as YesNo)}
+                        >
+                            <option value="">Selecione</option>
+                            <option value="sim">Sim</option>
+                            <option value="não">Não</option>
+                          </select>
+                        </InputLabel>
+                      )}
+                    </>
+                  )}
+                </div>
+              </SectionCard>
+              <SectionCard title="Processamento">
+                <div className="grid gap-4">
+                  <InputLabel label="Contrarrazões">
+                    <select
+                      className={inputClass('contrarra')}
+                      value={state.contrarra}
+                      onChange={(e) =>
+                        handleChange('contrarra', e.target.value as TriagemState['contrarra'])
+                      }
+                    >
+                      <option value="">Selecione</option>
+                      <option value="apresentadas">Apresentadas</option>
+                      <option value="ausente alguma">Ausente alguma</option>
+                      <option value="ausentes">Ausentes</option>
+                    </select>
+                  </InputLabel>
+                {state.contrarra !== '' && state.contrarra !== 'ausentes' && (
+                  <InputLabel label="Movimentos das contrarrazões/renúncia">
+                    <input
+                      className={inputClass('contramovis')}
+                      placeholder="Ex.: 6.1; 7.1 (renúncia)"
+                      value={state.contramovis}
+                      onChange={(e) => handleChange('contramovis', e.target.value)}
+                    />
+                  </InputLabel>
+                )}
+                {state.contrarra !== 'apresentadas' && (
+                  <>
+                    <InputLabel label="Recorrido(s) intimado(s)?">
+                      <select
+                        className={inputClass('intimado')}
+                        value={state.intimado}
+                        onChange={(e) => handleChange('intimado', e.target.value as YesNo)}
+                      >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                      {state.intimado === 'sim' && (
+                        <>
+                        <InputLabel label="Movimento de intimação">
+                          <input
+                            className={inputClass('intimovi')}
+                            placeholder="Ex.: 3.1"
+                            value={state.intimovi}
+                            onChange={(e) => handleChange('intimovi', e.target.value)}
+                          />
+                        </InputLabel>
+                        <InputLabel label="Prazo em aberto para algum recorrido?">
+                          <select
+                            className={inputClass('crraberto')}
+                            value={state.crraberto}
+                            onChange={(e) => handleChange('crraberto', e.target.value as YesNo)}
+                          >
+                              <option value="">Selecione</option>
+                              <option value="sim">Sim</option>
+                              <option value="não">Não</option>
+                            </select>
+                          </InputLabel>
+                        {state.crraberto === 'não' && (
+                          <InputLabel label="Decurso certificado?">
+                            <select
+                              className={inputClass('decursocrr')}
+                              value={state.decursocrr}
+                              onChange={(e) => handleChange('decursocrr', e.target.value as YesNo)}
+                            >
+                                <option value="">Selecione</option>
+                                <option value="sim">Sim</option>
+                                <option value="não">Não</option>
+                              </select>
+                            </InputLabel>
+                          )}
+                        </>
+                      )}
+                    {state.intimado === 'não' && (
+                      <InputLabel label="Recorrido(s) sem advogado constituído?">
+                        <select
+                          className={inputClass('semadv')}
+                          value={state.semadv}
+                          onChange={(e) => handleChange('semadv', e.target.value as YesNo)}
+                        >
+                            <option value="">Selecione</option>
+                            <option value="sim">Sim</option>
+                            <option value="não">Não</option>
+                          </select>
+                        </InputLabel>
+                      )}
+                    </>
+                  )}
+                <InputLabel label="Intervenção do MP?">
+                  <select
+                    className={inputClass('emepe')}
+                    value={state.emepe}
+                    onChange={(e) => handleChange('emepe', e.target.value as YesNo)}
+                  >
+                      <option value="">Selecione</option>
+                      <option value="sim">Sim</option>
+                      <option value="não">Não</option>
+                    </select>
+                  </InputLabel>
+                  {state.emepe === 'sim' && (
+                    <>
+                    <InputLabel label="Manifestação nos autos?">
+                      <select
+                        className={inputClass('mani')}
+                        value={state.mani}
+                        onChange={(e) => handleChange('mani', e.target.value as YesNo)}
+                      >
+                          <option value="">Selecione</option>
+                          <option value="sim">Sim</option>
+                          <option value="não">Não</option>
+                        </select>
+                      </InputLabel>
+                      {state.mani === 'sim' && (
+                        <>
+                        <InputLabel label="Teor da manifestação">
+                          <select
+                            className={inputClass('teormani')}
+                            value={state.teormani}
+                            onChange={(e) =>
+                              handleChange('teormani', e.target.value as TriagemState['teormani'])
+                            }
+                            >
+                              <option value="">Selecione</option>
+                              <option value="mera ciência">Mera ciência</option>
+                              <option value="pela admissão">Pela admissão</option>
+                              <option value="pela inadmissão">Pela inadmissão</option>
+                              <option value="ausência de interesse">Ausência de interesse</option>
+                            </select>
+                          </InputLabel>
+                        <InputLabel label="Movimento">
+                          <input
+                            className={inputClass('manimovis')}
+                            placeholder="Ex.: 9.1"
+                            value={state.manimovis}
+                            onChange={(e) => handleChange('manimovis', e.target.value)}
+                          />
+                        </InputLabel>
+                        {state.teormani === 'mera ciência' && (
+                          <InputLabel label="Decurso do prazo?">
+                            <select
+                              className={inputClass('decursomp')}
+                              value={state.decursomp}
+                              onChange={(e) => handleChange('decursomp', e.target.value as YesNo)}
+                            >
+                                <option value="">Selecione</option>
+                                <option value="sim">Sim</option>
+                                <option value="não">Não</option>
+                              </select>
+                            </InputLabel>
+                          )}
+                        </>
+                      )}
+                      {state.mani === 'não' && (
+                        <>
+                      <InputLabel label="Autos remetidos?">
+                        <select
+                          className={inputClass('remetido')}
+                          value={state.remetido}
+                          onChange={(e) => handleChange('remetido', e.target.value as YesNo)}
+                        >
+                              <option value="">Selecione</option>
+                              <option value="sim">Sim</option>
+                              <option value="não">Não</option>
+                            </select>
+                          </InputLabel>
+                        {state.remetido === 'sim' && (
+                          <InputLabel label="Decurso do prazo?">
+                            <select
+                              className={inputClass('decursomp')}
+                              value={state.decursomp}
+                              onChange={(e) => handleChange('decursomp', e.target.value as YesNo)}
+                            >
+                                <option value="">Selecione</option>
+                                <option value="sim">Sim</option>
+                                <option value="não">Não</option>
+                              </select>
+                            </InputLabel>
+                          )}
+                        </>
+                      )}
+                    </>
+                  )}
+                </div>
+              </SectionCard>
+            </div>
+          );
+        case 'resumo':
+          return (
+            <div className="space-y-4">
+              <SectionCard title="Resultado da triagem">
+                <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-800">
+                  <div>
+                    <strong>Tempestivo:</strong> {outputs.tempest.status}
+                  </div>
+                  <div>
+                    <strong>Contrarrazões:</strong> {outputs.controut}
+                  </div>
+                  <div>
+                    <strong>Ministério Público:</strong> {outputs.mpout}
+                  </div>
+                  <div>
+                    <strong>GRU:</strong> {outputs.grout}
+                  </div>
+                  <div>
+                    <strong>Funjus:</strong> {outputs.funjout}
+                  </div>
+                  <div>
+                    <strong>Procuração/Nomeação:</strong> {outputs.procurout}
+                  </div>
+                  <div>
+                    <strong>Exclusividade na intimação:</strong> {outputs.exclusout}
+                  </div>
+                  <div>
+                    <strong>Efeito suspensivo:</strong> {outputs.suspefout}
+                  </div>
+                  <div>
+                    <strong>Pagamento parcial:</strong> {outputs.parcialout}
+                  </div>
+                  <div>
+                    <strong>Vencimento:</strong> {formatDate(outputs.tempest.venc)}
+                  </div>
+                  <div>
+                    <strong>Prazo:</strong> {outputs.tempest.prazo || '—'} dias
+                  </div>
+                  <div>
+                    <strong>Câmara:</strong> {camaraLabel(state)}
+                  </div>
+                </div>
+              </SectionCard>
+              <SectionCard title="Observações e minutas sugeridas">
+                {outputs.observacoes.length === 0 ? (
+                  <p className="text-sm text-slate-600">Nenhuma observação pendente.</p>
+                ) : (
+                  <ul className="list-disc pl-5 space-y-2 text-sm text-slate-700">
+                    {outputs.observacoes.map((obs, idx) => (
+                      <li key={idx}>{obs}</li>
+                    ))}
+                  </ul>
+                )}
+              </SectionCard>
+              <div className="grid lg:grid-cols-2 gap-4">
+                <SectionCard title="Notas rápidas (salvas no navegador)">
+                  <div className="space-y-3">
+                    <textarea
+                      className={inputClass('anotacoes', 'h-32 resize-none')}
+                      maxLength={900}
+                      placeholder="Pendências específicas, nomes de partes, números de telefone..."
+                      value={state.anotacoes}
+                      onChange={(e) => handleChange('anotacoes', e.target.value)}
+                    />
+                    <div className="flex items-center justify-between text-xs text-slate-500">
+                      <span>Anotações guardadas apenas neste dispositivo.</span>
+                      <span>{state.anotacoes.length}/900</span>
+                    </div>
+                  </div>
+                </SectionCard>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={copyResumo}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition"
+                >
+                  <ClipboardList className="w-4 h-4" />
+                  {copied ? 'Copiado!' : 'Copiar resumo'}
+                </button>
+                <span className="sr-only" role="status" aria-live="polite">
+                  {copied ? 'Resumo copiado para a área de transferência.' : ''}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                <Pill>
+                  Tribunal Superior: {formatCurrency(outputs.deverST)} | FUNJUS: {formatCurrency(outputs.deverFJ)}
+                </Pill>
+                <Pill>Intimação: {formatDate(outputs.tempest.intim)}</Pill>
+                <Pill>Começo do prazo: {formatDate(outputs.tempest.comeco)}</Pill>
+              </div>
+            </div>
+          );
+        default:
+          return null;
+      }
+    })();
+
+    if (!content) return null;
+
+    return (
+      <div className="space-y-4">
+        {content}
+      </div>
+    );
+  };
+
+  const tempestTone: 'neutral' | 'positive' | 'negative' =
+    outputs.tempest.status === 'tempestivo'
+      ? 'positive'
+      : outputs.tempest.status === 'intempestivo'
+      ? 'negative'
+      : 'neutral';
+  const contraTone: 'neutral' | 'positive' | 'negative' =
+    state.contrarra === 'apresentadas'
+      ? 'positive'
+      : state.contrarra === 'ausentes' || state.contrarra === 'ausente alguma'
+      ? 'negative'
+      : 'neutral';
+  const savedLabel = lastSavedAt ? `Salvo às ${formatTime(lastSavedAt)}` : 'Salvamento local';
+  const custasHelper = state.interp
+    ? `${outputs.stLabel} ${formatCurrency(outputs.deverST)} (${formatIsoDate(
+        outputs.stRateStart
+      )}) | FUNJUS ${formatCurrency(outputs.deverFJ)} (${formatIsoDate(outputs.fjRateStart)})`
+    : 'Informe a data de interposição para calcular as custas.';
+  const custasTotal = state.interp ? formatCurrency(outputs.deverST + outputs.deverFJ) : '—';
+  const progress = Math.round((step / (steps.length - 1)) * 100);
+
+  return (
+    <div className="min-h-screen page-bg text-slate-900 relative">
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-24 -left-16 h-72 w-72 rounded-full bg-amber-200/30 blur-3xl" />
+        <div className="absolute top-6 right-[-5rem] h-64 w-64 rounded-full bg-teal-200/30 blur-3xl" />
+        <div className="absolute bottom-[-8rem] left-10 h-80 w-80 rounded-full bg-sky-200/30 blur-3xl" />
+      </div>
+      <div className="relative z-10">
+        <header className="border-b border-white/60 bg-white/75 backdrop-blur-2xl shadow-[0_25px_70px_-50px_rgba(15,23,42,0.55)]">
+          <div className="max-w-6xl mx-auto px-4 py-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 rounded-2xl bg-white border border-slate-200 overflow-hidden shadow-lg shadow-slate-300/60 flex items-center justify-center">
+                <img src={simbaLogo} alt="Simba-JUD" className="h-full w-full object-cover" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Simba-JUD</p>
+                <h1 className="text-xl font-semibold text-slate-900 leading-tight font-display">
+                  Admissibilidade Recursal
+                </h1>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="hidden md:flex items-center gap-2">
+                <Pill>{savedLabel}</Pill>
+              </div>
+              <button
+                onClick={() => confirmRestart('Isso vai limpar a triagem atual. Deseja continuar?')}
+                className="text-sm px-3 py-2 rounded-lg border border-slate-900 bg-slate-900 text-white hover:bg-black transition shadow-sm"
+              >
+                Recomeçar
+              </button>
+            </div>
+          </div>
+          <div className="max-w-6xl mx-auto px-4 pb-4">
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+              aria-label="Progresso da triagem"
+              className="h-2 bg-slate-100 rounded-full overflow-hidden"
+            >
+              <div
+                className="h-full bg-gradient-to-r from-slate-900 via-amber-500 to-teal-500 transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-slate-500 mt-2">
+              Etapa {step + 1} de {steps.length}: {steps[step].label}
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2 md:hidden">
+              <Pill>{savedLabel}</Pill>
+            </div>
+            <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-2" aria-label="Etapas">
+              {steps.map((item, index) => (
+                <StepChip
+                  key={item.id}
+                  label={item.label}
+                  icon={item.icon}
+                  active={step === index}
+                  onClick={() => setStep(index)}
+                />
+              ))}
+            </div>
+          </div>
+        </header>
+
+        <main ref={mainRef} className="max-w-7xl mx-auto px-4 py-8">
+        <div className="grid lg:grid-cols-[2fr_1fr] gap-5 items-start">
+          <div className="space-y-4">
+            <div className="bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-40px_rgba(15,23,42,0.5)]">
+              <div className="animate-fade-in">{renderStep()}</div>
+              <div className="mt-6 flex items-center justify-between">
+                <button
+                  onClick={prev}
+                  disabled={step === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 text-slate-800 bg-white disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-sm transition"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                  Voltar
+                </button>
+                {step < steps.length - 1 ? (
+                  <button
+                    onClick={next}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-slate-900 to-slate-800 text-white hover:from-slate-950 hover:to-slate-900 transition shadow-sm"
+                  >
+                    Avançar
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={downloadResumo}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-300 bg-red-600 text-white hover:bg-red-700 hover:shadow-sm transition"
+                    >
+                      <FileText className="w-4 h-4" />
+                      Baixar resumo
+                    </button>
+                    <button
+                      onClick={() => confirmRestart('Isso vai limpar a triagem atual. Deseja iniciar outra?')}
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-700 hover:to-teal-700 transition shadow-sm"
+                    >
+                      Nova triagem
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <aside className="space-y-3 lg:sticky lg:top-20">
+            <SectionCard title="Resumo">
+              <div className="grid gap-3">
+                <MetricCard
+                  label="Tempestividade"
+                  value={outputs.tempest.status}
+                  helper={`Vencimento: ${formatDate(outputs.tempest.venc)}`}
+                  tone={tempestTone}
+                />
+                <MetricCard
+                  label="Contrarrazões"
+                  value={outputs.controut}
+                  helper={state.emaberto === 'sim' ? 'Prazo em aberto na origem' : 'Fluxo em andamento'}
+                  tone={contraTone}
+                />
+                <MetricCard
+                  label="Custas estimadas"
+                  value={custasTotal}
+                  helper={custasHelper}
+                />
+              </div>
+            </SectionCard>
+            <SectionCard title="Consequências automáticas">
+              {consequencias.length === 0 ? (
+                <p className="text-sm text-slate-600">Nenhum comando gerado até agora.</p>
+              ) : (
+                <ul className="list-disc pl-5 space-y-2 text-sm text-slate-700">
+                  {consequencias.map((item, idx) => (
+                    <li key={idx}>{item}</li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={copyConsequencias}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition"
+                >
+                  <ClipboardList className="w-4 h-4" />
+                  {copiedCons ? 'Copiado!' : 'Copiar consequências'}
+                </button>
+                <span className="sr-only" role="status" aria-live="polite">
+                  {copiedCons ? 'Consequências copiadas para a área de transferência.' : ''}
+                </span>
+              </div>
+            </SectionCard>
+          </aside>
+        </div>
+      </main>
+      </div>
+    </div>
+  );
+};
+
+const root = createRoot(document.getElementById('root')!);
+root.render(<App />);
+
+// Tailwind-like input styling via Tailwind CDN
+const style = document.createElement('style');
+style.innerHTML = `
+.page-bg {
+  background:
+    radial-gradient(circle at 18% 16%, rgba(249, 115, 22, 0.12), transparent 36%),
+    radial-gradient(circle at 82% 12%, rgba(20, 184, 166, 0.12), transparent 38%),
+    radial-gradient(circle at 22% 78%, rgba(56, 189, 248, 0.12), transparent 40%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2f7 55%, #f1f5f9 100%);
+}
+.page-bg ::selection {
+  background: rgba(249, 115, 22, 0.18);
+  color: #0f172a;
+}
+.input {
+  width: 100%;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(226, 232, 240, 0.95);
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  min-height: 2.5rem;
+  box-sizing: border-box;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.input::placeholder {
+  color: #94a3b8;
+}
+.input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.18);
+  border-color: rgba(249, 115, 22, 0.65);
+  background: #ffffff;
+}
+.input-error {
+  border-color: rgba(244, 63, 94, 0.6);
+  background: rgba(255, 241, 242, 0.7);
+}
+.input-error:focus {
+  box-shadow: 0 0 0 3px rgba(244, 63, 94, 0.18);
+  border-color: rgba(244, 63, 94, 0.8);
+}
+.input-success {
+  border-color: rgba(16, 185, 129, 0.7);
+  background: rgba(236, 253, 245, 0.6);
+}
+.input-success:focus {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.85);
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in {
+    animation: none !important;
+  }
+}
+`;
+document.head.appendChild(style);
