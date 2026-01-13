@@ -58,14 +58,17 @@ type MPTeor = 'mera ciência' | 'pela admissão' | 'pela inadmissão' | 'ausênc
 type CamaraArea = 'Cível' | 'Crime' | '';
 type ParcialOpcao = '' | 'não' | 'JG parcial' | 'COHAB Londrina' | 'outros';
 type UserRole = 'admin' | 'user';
+type ThemeMode = 'light' | 'dark';
 
 type UserProfile = {
   uid: string;
   email: string;
   name: string;
+  photoURL: string;
   role: UserRole;
   active: boolean;
   triageCount: number;
+  theme: ThemeMode;
   createdAt: string;
   updatedAt: string;
 };
@@ -380,6 +383,15 @@ const loadStoredState = (storageKey: string): LoadedState => {
 };
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 const isAllowedEmail = (value: string) => normalizeEmail(value).endsWith(`@${allowedEmailDomain}`);
+const getInitials = (value: string) => {
+  const parts = value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return 'U';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+};
 const formatAuthError = (error: unknown) => {
   const err = error as { code?: string; message?: string };
   switch (err.code) {
@@ -998,7 +1010,7 @@ const InputLabel = ({ label, children }: { label: string; children: React.ReactN
 );
 
 const SectionCard = ({ title, children }: { title: string; children: React.ReactNode }) => (
-  <div className="relative bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-42px_rgba(15,23,42,0.55)] overflow-hidden">
+  <div className="card-surface relative bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-42px_rgba(15,23,42,0.55)] overflow-hidden">
     <div className="absolute inset-x-6 top-0 h-[2px] bg-gradient-to-r from-slate-900 via-amber-500 to-teal-500 opacity-80" />
     <div className="absolute -right-12 -top-10 h-28 w-28 rounded-full bg-amber-200/30 blur-3xl" />
     <div className="relative space-y-4">
@@ -1025,7 +1037,7 @@ const Pill = ({
   };
   return (
     <span
-      className={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold shadow-sm ${tones[tone]}`}
+      className={`pill inline-flex items-center gap-2 px-3 py-1 rounded-full border text-xs font-semibold shadow-sm ${tones[tone]}`}
     >
       {children}
     </span>
@@ -1049,7 +1061,7 @@ const MetricCard = ({
     negative: 'border-amber-200/80 bg-amber-50/90 text-amber-900 shadow-[0_18px_40px_-30px_rgba(245,158,11,0.35)]',
   };
   return (
-    <div className={`rounded-2xl border px-4 py-3 ${tones[tone]}`}>
+    <div className={`metric-surface rounded-2xl border px-4 py-3 ${tones[tone]}`}>
       <p className="text-[11px] uppercase tracking-[0.24em] font-semibold text-slate-500">{label}</p>
       <p className="text-lg font-semibold leading-tight mt-1">{value}</p>
       {helper && <p className="text-xs mt-1 text-slate-600">{helper}</p>}
@@ -1072,7 +1084,7 @@ const StepChip = ({
     type="button"
     onClick={onClick}
     aria-current={active ? 'step' : undefined}
-    className={`group inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition shadow-sm whitespace-nowrap ${
+    className={`step-chip group inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold transition shadow-sm whitespace-nowrap ${
       active
         ? 'border-slate-900 bg-slate-900 text-white shadow-[0_12px_30px_-20px_rgba(15,23,42,0.6)]'
         : 'border-slate-200 bg-white/80 text-slate-700 hover:border-slate-300 hover:shadow-md'
@@ -1104,6 +1116,11 @@ const App = () => {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const triageLoggedRef = useRef(false);
   const triageLogInFlightRef = useRef(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({ name: '', photoURL: '' });
+  const [profileNotice, setProfileNotice] = useState('');
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [theme, setTheme] = useState<ThemeMode>('light');
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminUsers, setAdminUsers] = useState<UserProfile[]>([]);
   const [adminFilter, setAdminFilter] = useState('');
@@ -1156,9 +1173,11 @@ const App = () => {
             uid: user.uid,
             email,
             name: user.displayName || '',
+            photoURL: user.photoURL || '',
             role: isBootstrapAdmin ? 'admin' : 'user',
             active: true,
             triageCount: 0,
+            theme: 'light',
             createdAt: now,
             updatedAt: now,
           };
@@ -1169,9 +1188,11 @@ const App = () => {
             uid: user.uid,
             email: data.email ?? email,
             name: data.name ?? user.displayName ?? '',
+            photoURL: data.photoURL ?? user.photoURL ?? '',
             role: data.role ?? (isBootstrapAdmin ? 'admin' : 'user'),
             active: data.active ?? true,
             triageCount: data.triageCount ?? 0,
+            theme: data.theme ?? 'light',
             createdAt: data.createdAt ?? now,
             updatedAt: now,
           };
@@ -1242,9 +1263,11 @@ const App = () => {
             uid: docSnap.id,
             email: data.email ?? '',
             name: data.name ?? '',
+            photoURL: data.photoURL ?? '',
             role,
             active: data.active ?? true,
             triageCount: data.triageCount ?? 0,
+            theme: data.theme ?? 'light',
             createdAt: data.createdAt ?? '',
             updatedAt: data.updatedAt ?? '',
           };
@@ -1266,6 +1289,23 @@ const App = () => {
   useEffect(() => {
     if (!isAdmin) setAdminOpen(false);
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (!profile) return;
+    setProfileDraft({ name: profile.name ?? '', photoURL: profile.photoURL ?? '' });
+    setTheme(profile.theme ?? 'light');
+  }, [profile?.uid]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('theme-dark', theme === 'dark');
+    const key = authUser?.uid ? `triario_theme_${authUser.uid}` : 'triario_theme_anon';
+    try {
+      localStorage.setItem(key, theme);
+    } catch {
+      /* ignore */
+    }
+  }, [theme, authUser?.uid]);
 
   const outputs = useMemo(() => computeOutputs(state), [state]);
   const summaryText = useMemo(() => buildResumoText(state, outputs), [state, outputs]);
@@ -1557,6 +1597,8 @@ const App = () => {
     setState(initialState);
     setStep(0);
     setAdminOpen(false);
+    setProfileOpen(false);
+    setProfileNotice('');
     triageLoggedRef.current = false;
     triageLogInFlightRef.current = false;
   };
@@ -1636,6 +1678,62 @@ const App = () => {
       setAdminNotice(formatAuthError(err));
     } finally {
       triageLogInFlightRef.current = false;
+    }
+  };
+
+  const handleProfileSave = async () => {
+    if (!auth || !authUser || !db || !profile) return;
+    const name = profileDraft.name.trim();
+    const photoURL = profileDraft.photoURL.trim();
+    const updates: Partial<UserProfile> = {};
+    if (name !== profile.name) updates.name = name;
+    if (photoURL !== profile.photoURL) updates.photoURL = photoURL;
+    if (Object.keys(updates).length === 0) {
+      setProfileNotice('Nenhuma alteração para salvar.');
+      return;
+    }
+    setProfileBusy(true);
+    setProfileNotice('');
+    try {
+      await updateProfile(authUser, {
+        displayName: name || null,
+        photoURL: photoURL || null,
+      });
+      await updateDoc(doc(db, USERS_COLLECTION, authUser.uid), {
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      });
+      setProfile((prev) => (prev ? { ...prev, ...updates } : prev));
+      setProfileNotice('Perfil atualizado.');
+    } catch (err) {
+      setProfileNotice(formatAuthError(err));
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const handleProfileResetPassword = async () => {
+    if (!auth || !authUser?.email) return;
+    setProfileNotice('');
+    try {
+      await sendPasswordResetEmail(auth, authUser.email);
+      setProfileNotice('Enviamos um e-mail para redefinir sua senha.');
+    } catch (err) {
+      setProfileNotice(formatAuthError(err));
+    }
+  };
+
+  const handleThemeToggle = async (next: ThemeMode) => {
+    setTheme(next);
+    if (!db || !authUser || !profile) return;
+    try {
+      await updateDoc(doc(db, USERS_COLLECTION, authUser.uid), {
+        theme: next,
+        updatedAt: new Date().toISOString(),
+      });
+      setProfile((prev) => (prev ? { ...prev, theme: next } : prev));
+    } catch (err) {
+      setProfileNotice(formatAuthError(err));
     }
   };
 
@@ -1839,6 +1937,103 @@ const App = () => {
             </p>
           </div>
         </div>
+      </div>
+    );
+  };
+
+  const renderProfilePanel = () => {
+    if (!profileOpen || !profile) return null;
+    const displayName = profileDraft.name || profile.email;
+    return (
+      <div className="mb-6">
+        <SectionCard title="Meu perfil">
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="avatar-surface h-16 w-16 rounded-2xl border border-slate-200 bg-white/80 flex items-center justify-center overflow-hidden">
+                {profileDraft.photoURL ? (
+                  <img
+                    src={profileDraft.photoURL}
+                    alt="Foto de perfil"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span className="text-lg font-semibold text-slate-700">
+                    {getInitials(displayName)}
+                  </span>
+                )}
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-semibold text-slate-900">{displayName}</p>
+                <p className="text-xs text-slate-500">{profile.email}</p>
+                <p className="text-xs text-slate-500">Triagens: {profile.triageCount || 0}</p>
+              </div>
+            </div>
+            {profileNotice && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+                {profileNotice}
+              </div>
+            )}
+            <div className="grid gap-3 md:grid-cols-2">
+              <InputLabel label="Nome">
+                <input
+                  className="input"
+                  value={profileDraft.name}
+                  onChange={(e) => setProfileDraft((prev) => ({ ...prev, name: e.target.value }))}
+                />
+              </InputLabel>
+              <InputLabel label="Foto de perfil (URL)">
+                <input
+                  className="input"
+                  placeholder="https://..."
+                  value={profileDraft.photoURL}
+                  onChange={(e) =>
+                    setProfileDraft((prev) => ({ ...prev, photoURL: e.target.value }))
+                  }
+                />
+              </InputLabel>
+            </div>
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+                  checked={theme === 'dark'}
+                  onChange={(e) => handleThemeToggle(e.target.checked ? 'dark' : 'light')}
+                />
+                Modo escuro
+              </label>
+              <span className="text-xs text-slate-500">
+                Preferência salva neste dispositivo e no perfil.
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleProfileSave}
+                disabled={profileBusy}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-black transition shadow-sm disabled:opacity-60"
+              >
+                {profileBusy ? 'Salvando...' : 'Salvar perfil'}
+              </button>
+              <button
+                type="button"
+                onClick={handleProfileResetPassword}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition"
+              >
+                Enviar reset de senha
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileDraft((prev) => ({ ...prev, photoURL: '' }));
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition"
+              >
+                Remover foto
+              </button>
+            </div>
+          </div>
+        </SectionCard>
       </div>
     );
   };
@@ -3153,7 +3348,7 @@ const App = () => {
         <div className="absolute bottom-[-8rem] left-10 h-80 w-80 rounded-full bg-sky-200/30 blur-3xl" />
       </div>
       <div className="relative z-10">
-        <header className="border-b border-white/60 bg-white/75 backdrop-blur-2xl shadow-[0_25px_70px_-50px_rgba(15,23,42,0.55)]">
+        <header className="header-surface border-b border-white/60 bg-white/75 backdrop-blur-2xl shadow-[0_25px_70px_-50px_rgba(15,23,42,0.55)]">
           <div className="max-w-6xl mx-auto px-4 py-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-3">
               <div className="h-11 w-11 rounded-2xl bg-white border border-slate-200 overflow-hidden shadow-lg shadow-slate-300/60 flex items-center justify-center">
@@ -3169,10 +3364,29 @@ const App = () => {
             <div className="flex flex-wrap items-center gap-2">
               <div className="hidden md:flex items-center gap-2">
                 <Pill>{savedLabel}</Pill>
-                <Pill>{profile.name || profile.email}</Pill>
+                <div className="user-chip flex items-center gap-2 rounded-full border border-slate-200 bg-white/80 px-3 py-1 shadow-sm">
+                  <div className="avatar-surface h-6 w-6 rounded-full overflow-hidden border border-slate-200 bg-white flex items-center justify-center">
+                    {profile.photoURL ? (
+                      <img src={profile.photoURL} alt="Perfil" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="text-[10px] font-semibold text-slate-600">
+                        {getInitials(profile.name || profile.email)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs font-semibold text-slate-700">
+                    {profile.name || profile.email}
+                  </span>
+                </div>
                 <Pill>Triagens: {profile.triageCount || 0}</Pill>
                 {isAdmin && <Pill tone="success">Admin</Pill>}
               </div>
+              <button
+                onClick={() => setProfileOpen((open) => !open)}
+                className="text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition"
+              >
+                {profileOpen ? 'Fechar perfil' : 'Perfil'}
+              </button>
               {isAdmin && (
                 <button
                   onClick={() => setAdminOpen((open) => !open)}
@@ -3233,10 +3447,11 @@ const App = () => {
         </header>
 
         <main ref={mainRef} className="max-w-7xl mx-auto px-4 py-8">
+          {renderProfilePanel()}
           {renderAdminPanel()}
           <div className="grid lg:grid-cols-[2fr_1fr] gap-5 items-start">
             <div className="space-y-4">
-              <div className="bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-40px_rgba(15,23,42,0.5)]">
+            <div className="main-surface bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-40px_rgba(15,23,42,0.5)]">
                 <div className="animate-fade-in">{renderStep()}</div>
                 <div className="mt-6 flex items-center justify-between">
                   <button
@@ -3345,6 +3560,77 @@ style.innerHTML = `
 .page-bg ::selection {
   background: rgba(249, 115, 22, 0.18);
   color: #0f172a;
+}
+.theme-dark body {
+  color: #e2e8f0;
+  background: #0b1220;
+}
+.theme-dark .page-bg {
+  background:
+    radial-gradient(circle at 18% 16%, rgba(148, 163, 184, 0.12), transparent 36%),
+    radial-gradient(circle at 82% 12%, rgba(56, 189, 248, 0.08), transparent 38%),
+    radial-gradient(circle at 22% 78%, rgba(45, 212, 191, 0.1), transparent 40%),
+    linear-gradient(180deg, #0b1220 0%, #0f172a 60%, #111827 100%);
+}
+.theme-dark .header-surface {
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(148, 163, 184, 0.2);
+}
+.theme-dark .card-surface,
+.theme-dark .main-surface {
+  background: rgba(15, 23, 42, 0.85);
+  border-color: rgba(148, 163, 184, 0.2);
+  box-shadow: 0 24px 50px -40px rgba(0, 0, 0, 0.6);
+}
+.theme-dark .user-chip {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(148, 163, 184, 0.3);
+}
+.theme-dark .avatar-surface {
+  background: rgba(15, 23, 42, 0.95);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+.theme-dark .metric-surface {
+  background: rgba(30, 41, 59, 0.75);
+  border-color: rgba(148, 163, 184, 0.2);
+  color: #e2e8f0;
+}
+.theme-dark .pill {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(148, 163, 184, 0.25);
+  color: #e2e8f0;
+}
+.theme-dark .step-chip {
+  border-color: rgba(148, 163, 184, 0.35);
+}
+.theme-dark .step-chip[aria-current='step'] {
+  background: #0f172a;
+  border-color: rgba(148, 163, 184, 0.35);
+}
+.theme-dark .input {
+  background: rgba(15, 23, 42, 0.85);
+  border-color: rgba(148, 163, 184, 0.4);
+  color: #e2e8f0;
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.6);
+}
+.theme-dark .input::placeholder {
+  color: rgba(148, 163, 184, 0.8);
+}
+.theme-dark .input:focus {
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+  border-color: rgba(56, 189, 248, 0.6);
+}
+.theme-dark .text-slate-900,
+.theme-dark .text-slate-800,
+.theme-dark .text-slate-700 {
+  color: #e2e8f0 !important;
+}
+.theme-dark .text-slate-600,
+.theme-dark .text-slate-500 {
+  color: rgba(226, 232, 240, 0.75) !important;
+}
+.theme-dark .border-slate-200 {
+  border-color: rgba(148, 163, 184, 0.3) !important;
 }
 .input {
   width: 100%;

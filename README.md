@@ -45,6 +45,7 @@ Notas:
 - Cadastro permitido apenas para contas `@tjpr.jus.br` (pode ajustar via `VITE_ALLOWED_EMAIL_DOMAIN`).
 - No cadastro, o Firebase envia um aviso por e-mail (use o template de verificação do Auth).
 - Login só é liberado após confirmação do e-mail.
+- Perfil permite atualizar nome, foto (URL) e preferência de tema.
 
 Regras sugeridas (Firestore):
 
@@ -72,7 +73,7 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (request.auth.uid == userId
           && canAccess()
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'triageCount', 'updatedAt']));
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'photoURL', 'theme', 'triageCount', 'updatedAt']));
     }
   }
 }
