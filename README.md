@@ -70,6 +70,7 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if request.auth != null && canAccess() && (request.auth.uid == userId || isAdmin());
       allow create: if request.auth != null && request.auth.uid == userId && canAccess();
+      allow delete: if request.auth != null && canAccess() && (request.auth.uid == userId || isAdmin());
       allow update: if isAdmin()
         || (request.auth.uid == userId
           && canAccess()

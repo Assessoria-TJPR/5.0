@@ -14,10 +14,17 @@ import {
 import { initializeApp } from 'firebase/app';
 import {
   createUserWithEmailAndPassword,
+  browserLocalPersistence,
+  browserSessionPersistence,
+  deleteUser,
+  EmailAuthProvider,
   getAuth,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   sendEmailVerification,
+  reload,
   sendPasswordResetEmail,
+  setPersistence,
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
@@ -25,6 +32,7 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getFirestore,
@@ -153,6 +161,7 @@ type LoadedState = { state: TriagemState; savedAt: Date | null };
 const STORAGE_KEY = 'triario_state_v2';
 const STORAGE_VERSION = 3;
 const USERS_COLLECTION = 'users';
+const REMEMBER_KEY = 'triario_remember_login';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? '',
@@ -382,6 +391,46 @@ const loadStoredState = (storageKey: string): LoadedState => {
   }
 };
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
+const normalizeUserKey = (user: UserProfile) => {
+  const email = user.email ? normalizeEmail(user.email) : '';
+  return email || user.uid;
+};
+const getTimestamp = (value: string) => {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+const pickPreferredUser = (current: UserProfile, candidate: UserProfile) => {
+  if (current.role !== candidate.role) {
+    return candidate.role === 'admin' ? candidate : current;
+  }
+  if (current.active !== candidate.active) {
+    return candidate.active ? candidate : current;
+  }
+  const currentUpdated = getTimestamp(current.updatedAt);
+  const candidateUpdated = getTimestamp(candidate.updatedAt);
+  if (candidateUpdated !== currentUpdated) {
+    return candidateUpdated > currentUpdated ? candidate : current;
+  }
+  const currentTriages = current.triageCount || 0;
+  const candidateTriages = candidate.triageCount || 0;
+  if (candidateTriages !== currentTriages) {
+    return candidateTriages > currentTriages ? candidate : current;
+  }
+  return current;
+};
+const dedupeUsers = (users: UserProfile[]) => {
+  const map = new Map<string, UserProfile>();
+  users.forEach((user) => {
+    const key = normalizeUserKey(user);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, user);
+      return;
+    }
+    map.set(key, pickPreferredUser(existing, user));
+  });
+  return Array.from(map.values());
+};
 const isAllowedEmail = (value: string) => normalizeEmail(value).endsWith(`@${allowedEmailDomain}`);
 const getInitials = (value: string) => {
   const parts = value
@@ -1095,12 +1144,49 @@ const StepChip = ({
   </button>
 );
 
+const watermarkLines: React.ReactNode[] = [
+  'Desenvolvido por :',
+  '',
+  'P-SEP-AR - GESTÃO 2025/2026',
+  '',
+  'Assessoria de Recursos aos Tribunais Superiores',
+  '',
+  '(STF e STJ) da Secretaria Especial da Presidência',
+  '',
+  'Elvertoni Martelli Coimbr',
+  '',
+  'Luís Gustavo Arruda Lançoni',
+  '',
+  'Rodrigo Louzano',
+];
+
+const Watermark = () => (
+  <div className="watermark pointer-events-none fixed bottom-4 right-4 z-30 max-w-[320px] text-right text-[9px] leading-tight opacity-80">
+    <p>
+      {watermarkLines.map((line, index) => (
+        <React.Fragment key={index}>
+          {line}
+          {index < watermarkLines.length - 1 && <br />}
+        </React.Fragment>
+      ))}
+    </p>
+  </div>
+);
+
 const App = () => {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'reset'>('login');
-  const [authEmail, setAuthEmail] = useState('');
+  const [authEmailLocal, setAuthEmailLocal] = useState('');
+  const [rememberLogin, setRememberLogin] = useState(() => {
+    try {
+      const stored = localStorage.getItem(REMEMBER_KEY);
+      return stored ? stored === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
   const [authPassword, setAuthPassword] = useState('');
   const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
   const [authName, setAuthName] = useState('');
@@ -1120,7 +1206,12 @@ const App = () => {
   const [profileDraft, setProfileDraft] = useState({ name: '', photoURL: '' });
   const [profileNotice, setProfileNotice] = useState('');
   const [profileBusy, setProfileBusy] = useState(false);
+  const [selfDeleteOpen, setSelfDeleteOpen] = useState(false);
+  const [selfDeletePassword, setSelfDeletePassword] = useState('');
+  const [selfDeleteError, setSelfDeleteError] = useState('');
+  const [selfDeleteBusy, setSelfDeleteBusy] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>('light');
+  const [resendCooldown, setResendCooldown] = useState(0);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminUsers, setAdminUsers] = useState<UserProfile[]>([]);
   const [adminFilter, setAdminFilter] = useState('');
@@ -1129,8 +1220,15 @@ const App = () => {
   >({});
   const [adminBusyUid, setAdminBusyUid] = useState<string | null>(null);
   const [adminNotice, setAdminNotice] = useState('');
+  const [deleteTargetUid, setDeleteTargetUid] = useState<string | null>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteBusyUid, setDeleteBusyUid] = useState<string | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
   const isAdmin = profile?.role === 'admin';
+  const authEmailValue = authEmailLocal
+    ? `${authEmailLocal.trim().toLowerCase()}@${allowedEmailDomain}`
+    : '';
 
   useEffect(() => {
     if (!firebaseEnabled || !auth || !db) {
@@ -1256,7 +1354,7 @@ const App = () => {
     const unsub = onSnapshot(
       usersQuery,
       (snapshot) => {
-        const nextUsers = snapshot.docs.map((docSnap) => {
+        const rawUsers = snapshot.docs.map((docSnap) => {
           const data = docSnap.data() as Partial<UserProfile>;
           const role = data.role === 'admin' ? 'admin' : 'user';
           return {
@@ -1272,6 +1370,7 @@ const App = () => {
             updatedAt: data.updatedAt ?? '',
           };
         });
+        const nextUsers = dedupeUsers(rawUsers);
         nextUsers.sort((a, b) => {
           const nameCompare = a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' });
           if (nameCompare !== 0) return nameCompare;
@@ -1287,14 +1386,49 @@ const App = () => {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (!isAdmin) setAdminOpen(false);
+    if (!isAdmin) {
+      setAdminOpen(false);
+      setDeleteTargetUid(null);
+      setDeletePassword('');
+      setDeleteError('');
+    }
   }, [isAdmin]);
+
+  useEffect(() => {
+    if (adminOpen) return;
+    setDeleteTargetUid(null);
+    setDeletePassword('');
+    setDeleteError('');
+  }, [adminOpen]);
+
+  useEffect(() => {
+    if (profileOpen) return;
+    setSelfDeleteOpen(false);
+    setSelfDeletePassword('');
+    setSelfDeleteError('');
+  }, [profileOpen]);
 
   useEffect(() => {
     if (!profile) return;
     setProfileDraft({ name: profile.name ?? '', photoURL: profile.photoURL ?? '' });
     setTheme(profile.theme ?? 'light');
   }, [profile?.uid]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = window.setTimeout(() => {
+      setResendCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [resendCooldown]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(REMEMBER_KEY, String(rememberLogin));
+    } catch {
+      /* ignore */
+    }
+  }, [rememberLogin]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1516,13 +1650,19 @@ const App = () => {
     setAuthBusy(true);
     setAuthError('');
     setAuthMessage('');
-    if (!isAllowedEmail(authEmail)) {
+    if (!authEmailLocal.trim()) {
+      setAuthError('Informe seu usuário @tjpr.jus.br.');
+      setAuthBusy(false);
+      return;
+    }
+    if (!isAllowedEmail(authEmailValue)) {
       setAuthError(`Use um e-mail @${allowedEmailDomain} para entrar.`);
       setAuthBusy(false);
       return;
     }
     try {
-      await signInWithEmailAndPassword(auth, authEmail.trim(), authPassword);
+      await setPersistence(auth, rememberLogin ? browserLocalPersistence : browserSessionPersistence);
+      await signInWithEmailAndPassword(auth, authEmailValue, authPassword);
     } catch (err) {
       setAuthError(formatAuthError(err));
     } finally {
@@ -1535,7 +1675,12 @@ const App = () => {
     setAuthBusy(true);
     setAuthError('');
     setAuthMessage('');
-    if (!isAllowedEmail(authEmail)) {
+    if (!authEmailLocal.trim()) {
+      setAuthError('Informe seu usuário @tjpr.jus.br.');
+      setAuthBusy(false);
+      return;
+    }
+    if (!isAllowedEmail(authEmailValue)) {
       setAuthError(`O cadastro é permitido apenas para e-mails @${allowedEmailDomain}.`);
       setAuthBusy(false);
       return;
@@ -1551,7 +1696,8 @@ const App = () => {
       return;
     }
     try {
-      const cred = await createUserWithEmailAndPassword(auth, authEmail.trim(), authPassword);
+      await setPersistence(auth, rememberLogin ? browserLocalPersistence : browserSessionPersistence);
+      const cred = await createUserWithEmailAndPassword(auth, authEmailValue, authPassword);
       if (authName.trim()) {
         await updateProfile(cred.user, { displayName: authName.trim() });
       }
@@ -1576,14 +1722,55 @@ const App = () => {
     setAuthBusy(true);
     setAuthError('');
     setAuthMessage('');
-    if (!isAllowedEmail(authEmail)) {
+    if (!authEmailLocal.trim()) {
+      setAuthError('Informe seu usuário @tjpr.jus.br.');
+      setAuthBusy(false);
+      return;
+    }
+    if (!isAllowedEmail(authEmailValue)) {
       setAuthError(`Use um e-mail @${allowedEmailDomain} para redefinir a senha.`);
       setAuthBusy(false);
       return;
     }
     try {
-      await sendPasswordResetEmail(auth, authEmail.trim());
+      await sendPasswordResetEmail(auth, authEmailValue);
       setAuthMessage('Enviamos um e-mail para redefinir sua senha.');
+    } catch (err) {
+      setAuthError(formatAuthError(err));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!auth || !authUser) return;
+    if (resendCooldown > 0) return;
+    setAuthBusy(true);
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      await sendEmailVerification(authUser);
+      setResendCooldown(20);
+      setAuthMessage('E-mail de confirmação reenviado.');
+    } catch (err) {
+      setAuthError(formatAuthError(err));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleCheckVerification = async () => {
+    if (!auth || !authUser) return;
+    setAuthBusy(true);
+    setAuthError('');
+    setAuthMessage('');
+    try {
+      await reload(authUser);
+      if (authUser.emailVerified) {
+        setAuthMessage('E-mail confirmado. Você já pode entrar.');
+      } else {
+        setAuthError('E-mail ainda não confirmado.');
+      }
     } catch (err) {
       setAuthError(formatAuthError(err));
     } finally {
@@ -1599,6 +1786,7 @@ const App = () => {
     setAdminOpen(false);
     setProfileOpen(false);
     setProfileNotice('');
+    setResendCooldown(0);
     triageLoggedRef.current = false;
     triageLogInFlightRef.current = false;
   };
@@ -1623,6 +1811,10 @@ const App = () => {
     const isSelf = authUser?.uid === user.uid;
     if (isSelf && adminCount <= 1 && draft.role !== 'admin') {
       setAdminNotice('Você é o último admin. Não é possível remover seu próprio acesso.');
+      return;
+    }
+    if (adminCount <= 1 && user.role === 'admin' && draft.role !== 'admin') {
+      setAdminNotice('É necessário manter pelo menos um admin ativo.');
       return;
     }
     if (
@@ -1658,6 +1850,37 @@ const App = () => {
       setAdminNotice(`E-mail de redefinição enviado para ${email}.`);
     } catch (err) {
       setAdminNotice(formatAuthError(err));
+    }
+  };
+
+  const handleDemoteFromAdmin = async (user: UserProfile) => {
+    if (!db) return;
+    const adminCount = adminUsers.filter((item) => item.role === 'admin').length;
+    const isSelf = authUser?.uid === user.uid;
+    if (isSelf) {
+      setAdminNotice('Você não pode remover seu próprio acesso de admin.');
+      return;
+    }
+    if (adminCount <= 1) {
+      setAdminNotice('É necessário manter pelo menos um admin ativo.');
+      return;
+    }
+    setAdminNotice('');
+    setAdminBusyUid(user.uid);
+    try {
+      await updateDoc(doc(db, USERS_COLLECTION, user.uid), {
+        role: 'user',
+        updatedAt: new Date().toISOString(),
+      });
+      setAdminNotice(`${user.email || 'Usuário'} removido do perfil admin.`);
+      setAdminEdits((prev) => {
+        if (!prev[user.uid]) return prev;
+        return { ...prev, [user.uid]: { ...prev[user.uid], role: 'user' } };
+      });
+    } catch (err) {
+      setAdminNotice(formatAuthError(err));
+    } finally {
+      setAdminBusyUid(null);
     }
   };
 
@@ -1723,6 +1946,36 @@ const App = () => {
     }
   };
 
+  const toggleSelfDelete = () => {
+    setSelfDeleteOpen((open) => !open);
+    setSelfDeletePassword('');
+    setSelfDeleteError('');
+  };
+
+  const handleSelfDelete = async () => {
+    if (!auth || !authUser || !db) return;
+    if (!authUser.email) {
+      setSelfDeleteError('E-mail do usuário indisponível.');
+      return;
+    }
+    if (!selfDeletePassword.trim()) {
+      setSelfDeleteError('Informe sua senha para confirmar a exclusão.');
+      return;
+    }
+    setSelfDeleteError('');
+    setSelfDeleteBusy(true);
+    try {
+      const credential = EmailAuthProvider.credential(authUser.email, selfDeletePassword);
+      await reauthenticateWithCredential(authUser, credential);
+      await deleteDoc(doc(db, USERS_COLLECTION, authUser.uid));
+      await deleteUser(authUser);
+    } catch (err) {
+      setSelfDeleteError(formatAuthError(err));
+    } finally {
+      setSelfDeleteBusy(false);
+    }
+  };
+
   const handleThemeToggle = async (next: ThemeMode) => {
     setTheme(next);
     if (!db || !authUser || !profile) return;
@@ -1755,6 +2008,48 @@ const App = () => {
       setAdminNotice(formatAuthError(err));
     } finally {
       setAdminBusyUid(null);
+    }
+  };
+
+  const openDeletePrompt = (user: UserProfile) => {
+    if (deleteTargetUid === user.uid) {
+      setDeleteTargetUid(null);
+      setDeletePassword('');
+      setDeleteError('');
+      return;
+    }
+    setDeleteTargetUid(user.uid);
+    setDeletePassword('');
+    setDeleteError('');
+  };
+
+  const handleDeleteUser = async (user: UserProfile) => {
+    if (!auth || !authUser || !db) return;
+    if (authUser.uid === user.uid) {
+      setDeleteError('Não é possível excluir o próprio usuário.');
+      return;
+    }
+    if (!authUser.email) {
+      setDeleteError('E-mail do administrador indisponível.');
+      return;
+    }
+    if (!deletePassword.trim()) {
+      setDeleteError('Informe sua senha para confirmar a exclusão.');
+      return;
+    }
+    setDeleteError('');
+    setDeleteBusyUid(user.uid);
+    try {
+      const credential = EmailAuthProvider.credential(authUser.email, deletePassword);
+      await reauthenticateWithCredential(authUser, credential);
+      await deleteDoc(doc(db, USERS_COLLECTION, user.uid));
+      setAdminNotice('Usuário excluído da base.');
+      setDeleteTargetUid(null);
+      setDeletePassword('');
+    } catch (err) {
+      setDeleteError(formatAuthError(err));
+    } finally {
+      setDeleteBusyUid(null);
     }
   };
 
@@ -1795,7 +2090,7 @@ const App = () => {
   const renderAuth = () => {
     const needsProfile = Boolean(authUser && !profile);
     return (
-      <div className="min-h-screen page-bg text-slate-900">
+      <div className="min-h-screen page-bg text-slate-900 page-enter">
         <div className="min-h-screen flex items-center justify-center px-4 py-10">
           <div className="w-full max-w-2xl space-y-4">
             <div className="text-center space-y-2">
@@ -1831,112 +2126,172 @@ const App = () => {
                 </button>
               ))}
             </div>
-            {needsProfile && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                <p className="font-semibold">Perfil não carregado.</p>
-                <p className="mt-1">
-                  Verifique as regras do Firestore e domínios autorizados. Se quiser, saia e entre
-                  novamente.
-                </p>
-                <button
-                  type="button"
-                  onClick={handleSignOut}
-                  className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-200 bg-white text-amber-800 hover:shadow-sm transition"
-                >
-                  Sair
-                </button>
-              </div>
-            )}
-            <SectionCard title="Credenciais">
-              <form className="grid gap-4" onSubmit={handleAuthSubmit}>
-                {blockedNotice && (
-                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                    {blockedNotice}
-                  </div>
-                )}
-                {authError && (
-                  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                    {authError}
-                  </div>
-                )}
-                {authMessage && (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-                    {authMessage}
-                  </div>
-                )}
-                {authMode === 'register' && (
-                  <InputLabel label="Nome completo">
-                    <input
-                      className="input"
-                      value={authName}
-                      onChange={(e) => setAuthName(e.target.value)}
-                      placeholder="Digite seu nome"
-                      autoComplete="name"
-                    />
-                  </InputLabel>
-                )}
-                <InputLabel label="E-mail">
-                  <input
-                    className="input"
-                    type="email"
-                    value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    placeholder="nome@dominio.com"
-                    autoComplete="email"
-                    required
-                  />
-                </InputLabel>
-                {authMode !== 'reset' && (
-                  <InputLabel label="Senha">
-                    <input
-                      className="input"
-                      type="password"
-                      value={authPassword}
-                      onChange={(e) => setAuthPassword(e.target.value)}
-                      placeholder="••••••••"
-                      autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-                      required
-                    />
-                  </InputLabel>
-                )}
-                {authMode === 'register' && (
-                  <InputLabel label="Confirme a senha">
-                    <input
-                      className="input"
-                      type="password"
-                      value={authPasswordConfirm}
-                      onChange={(e) => setAuthPasswordConfirm(e.target.value)}
-                      placeholder="••••••••"
-                      autoComplete="new-password"
-                      required
-                    />
-                  </InputLabel>
-                )}
-                {authMode === 'reset' && (
-                  <p className="text-xs text-slate-500">
-                    Enviaremos um link de redefinição de senha para o seu e-mail.
+              {needsProfile && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <p className="font-semibold">Perfil não carregado.</p>
+                  <p className="mt-1">
+                    Verifique as regras do Firestore e domínios autorizados. Se quiser, saia e entre
+                    novamente.
                   </p>
-                )}
-                <button
-                  type="submit"
-                  disabled={authBusy}
-                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-black transition shadow-sm disabled:opacity-60"
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-amber-200 bg-white text-amber-800 hover:shadow-sm transition"
+                  >
+                    Sair
+                  </button>
+                </div>
+              )}
+              <SectionCard title="Credenciais">
+                <form
+                  className="grid gap-4"
+                  onSubmit={handleAuthSubmit}
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  data-bwignore="true"
                 >
-                  {authBusy
-                    ? 'Aguarde...'
-                    : authMode === 'login'
-                    ? 'Entrar'
-                    : authMode === 'register'
-                    ? 'Criar conta'
-                    : 'Enviar link'}
-                </button>
-              </form>
-            </SectionCard>
-            <p className="text-center text-xs text-slate-500">
-              Cadastro aberto apenas para contas @{allowedEmailDomain}.
-            </p>
+                  {blockedNotice && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      {blockedNotice}
+                    </div>
+                  )}
+                  {authError && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                      {authError}
+                    </div>
+                  )}
+                  {authMessage && (
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                      {authMessage}
+                    </div>
+                  )}
+                  {authMode === 'register' && (
+                    <InputLabel label="Nome completo">
+                      <input
+                        className="input"
+                        value={authName}
+                        onChange={(e) => setAuthName(e.target.value)}
+                        placeholder="Digite seu nome"
+                        autoComplete="off"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-bwignore="true"
+                      />
+                    </InputLabel>
+                  )}
+                  <InputLabel label="E-mail">
+                    <div className="flex items-center">
+                      <input
+                        className="input rounded-r-none"
+                        type="text"
+                        value={authEmailLocal}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const cleaned = raw.split('@')[0].replace(/\s+/g, '');
+                          setAuthEmailLocal(cleaned);
+                        }}
+                        placeholder="usuario"
+                        autoComplete="off"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-bwignore="true"
+                        required
+                      />
+                      <span className="px-3 py-[0.6rem] border border-l-0 border-slate-200 rounded-r-lg bg-slate-50 text-sm text-slate-600">
+                        @{allowedEmailDomain}
+                      </span>
+                    </div>
+                  </InputLabel>
+                  {authMode !== 'reset' && (
+                    <InputLabel label="Senha">
+                      <input
+                        className="input"
+                        type="password"
+                        value={authPassword}
+                        onChange={(e) => setAuthPassword(e.target.value)}
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-bwignore="true"
+                        required
+                      />
+                    </InputLabel>
+                  )}
+                  {authMode !== 'reset' && (
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+                        checked={rememberLogin}
+                        onChange={(e) => setRememberLogin(e.target.checked)}
+                      />
+                      Lembrar login neste dispositivo
+                    </label>
+                  )}
+                  {authMode === 'register' && (
+                    <InputLabel label="Confirme a senha">
+                      <input
+                        className="input"
+                        type="password"
+                        value={authPasswordConfirm}
+                        onChange={(e) => setAuthPasswordConfirm(e.target.value)}
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        data-bwignore="true"
+                        required
+                      />
+                    </InputLabel>
+                  )}
+                  {authMode === 'reset' && (
+                    <p className="text-xs text-slate-500">
+                      Enviaremos um link de redefinição de senha para o seu e-mail.
+                    </p>
+                  )}
+                  {authMode === 'login' && blockedNotice.includes('Confirme') && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleResendVerification}
+                        disabled={authBusy || resendCooldown > 0}
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition disabled:opacity-60"
+                      >
+                        {resendCooldown > 0 ? `Reenviar em ${resendCooldown}s` : 'Reenviar confirmação'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCheckVerification}
+                        disabled={authBusy}
+                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-800 hover:shadow-sm transition disabled:opacity-60"
+                      >
+                        Já confirmei
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={authBusy}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-black transition shadow-sm disabled:opacity-60"
+                  >
+                    {authBusy
+                      ? 'Aguarde...'
+                      : authMode === 'login'
+                      ? 'Entrar'
+                      : authMode === 'register'
+                      ? 'Criar conta'
+                      : 'Enviar link'}
+                  </button>
+                </form>
+              </SectionCard>
+              <p className="text-center text-xs text-slate-500">
+                Cadastro aberto apenas para contas @{allowedEmailDomain}.
+              </p>
           </div>
         </div>
+        <Watermark />
       </div>
     );
   };
@@ -2031,7 +2386,47 @@ const App = () => {
               >
                 Remover foto
               </button>
+              <button
+                type="button"
+                onClick={toggleSelfDelete}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition shadow-sm"
+              >
+                {selfDeleteOpen ? 'Cancelar exclusão' : 'Excluir minha conta'}
+              </button>
             </div>
+            {selfDeleteOpen && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-700">
+                <p className="font-semibold">Confirmação de exclusão</p>
+                <p className="mt-1">
+                  Esta ação é permanente. Informe sua senha para apagar sua conta.
+                </p>
+                {selfDeleteError && <p className="mt-2 text-xs text-rose-700">{selfDeleteError}</p>}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <input
+                    className="input flex-1 min-w-[200px]"
+                    type="password"
+                    value={selfDeletePassword}
+                    onChange={(e) => {
+                      setSelfDeletePassword(e.target.value);
+                      if (selfDeleteError) setSelfDeleteError('');
+                    }}
+                    placeholder="Senha atual"
+                    autoComplete="current-password"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    data-bwignore="true"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSelfDelete}
+                    disabled={selfDeleteBusy}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-700 transition shadow-sm disabled:opacity-60"
+                  >
+                    {selfDeleteBusy ? 'Excluindo...' : 'Excluir conta'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </SectionCard>
       </div>
@@ -2096,6 +2491,11 @@ const App = () => {
                   const draft = getAdminDraft(user);
                   const isSelf = authUser?.uid === user.uid;
                   const disableRoleChange = isSelf && adminCount <= 1;
+                  const deleteOpen = deleteTargetUid === user.uid;
+                  const disableDelete = isSelf;
+                  const canPromote = user.role !== 'admin' && draft.role !== 'admin';
+                  const canDemote = user.role === 'admin' && draft.role === 'admin';
+                  const disableDemote = isSelf || adminCount <= 1;
                   return (
                     <div
                       key={user.uid}
@@ -2161,7 +2561,7 @@ const App = () => {
                         >
                           {adminBusyUid === user.uid ? 'Salvando...' : 'Salvar'}
                         </button>
-                        {draft.role !== 'admin' && (
+                        {canPromote && (
                           <button
                             type="button"
                             onClick={() => handlePromoteToAdmin(user)}
@@ -2169,6 +2569,16 @@ const App = () => {
                             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-600 text-white hover:bg-emerald-700 transition shadow-sm disabled:opacity-60"
                           >
                             Promover a admin
+                          </button>
+                        )}
+                        {canDemote && (
+                          <button
+                            type="button"
+                            onClick={() => handleDemoteFromAdmin(user)}
+                            disabled={adminBusyUid === user.uid || disableDemote}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 transition shadow-sm disabled:opacity-60"
+                          >
+                            Remover admin
                           </button>
                         )}
                         <button
@@ -2179,7 +2589,48 @@ const App = () => {
                         >
                           Enviar reset de senha
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => openDeletePrompt(user)}
+                          disabled={disableDelete}
+                          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition shadow-sm disabled:opacity-60"
+                        >
+                          {deleteOpen ? 'Cancelar exclusão' : 'Excluir usuário'}
+                        </button>
                       </div>
+                      {deleteOpen && (
+                        <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-700">
+                          <p className="font-semibold">Confirmação de exclusão</p>
+                          <p className="mt-1">
+                            Para excluir este usuário, informe sua senha de administrador.
+                          </p>
+                          {deleteError && <p className="mt-2 text-xs text-rose-700">{deleteError}</p>}
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <input
+                              className="input flex-1 min-w-[200px]"
+                              type="password"
+                              value={deletePassword}
+                              onChange={(e) => {
+                                setDeletePassword(e.target.value);
+                                if (deleteError) setDeleteError('');
+                              }}
+                              placeholder="Senha do admin"
+                              autoComplete="current-password"
+                              data-lpignore="true"
+                              data-1p-ignore="true"
+                              data-bwignore="true"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUser(user)}
+                              disabled={deleteBusyUid === user.uid}
+                              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-700 transition shadow-sm disabled:opacity-60"
+                            >
+                              {deleteBusyUid === user.uid ? 'Excluindo...' : 'Excluir'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -3322,6 +3773,7 @@ const App = () => {
             <p>Depois reinicie o servidor.</p>
           </div>
         </SectionCard>
+        <Watermark />
       </div>
     );
   }
@@ -3332,6 +3784,7 @@ const App = () => {
         <SectionCard title="Carregando">
           <p className="text-sm text-slate-600">Preparando o acesso seguro...</p>
         </SectionCard>
+        <Watermark />
       </div>
     );
   }
@@ -3341,7 +3794,7 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen page-bg text-slate-900 relative">
+    <div className="min-h-screen page-bg text-slate-900 relative page-enter">
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute -top-24 -left-16 h-72 w-72 rounded-full bg-amber-200/30 blur-3xl" />
         <div className="absolute top-6 right-[-5rem] h-64 w-64 rounded-full bg-teal-200/30 blur-3xl" />
@@ -3452,7 +3905,7 @@ const App = () => {
           <div className="grid lg:grid-cols-[2fr_1fr] gap-5 items-start">
             <div className="space-y-4">
             <div className="main-surface bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-40px_rgba(15,23,42,0.5)]">
-                <div className="animate-fade-in">{renderStep()}</div>
+              <div className="animate-fade-in">{renderStep()}</div>
                 <div className="mt-6 flex items-center justify-between">
                   <button
                     onClick={prev}
@@ -3540,6 +3993,7 @@ const App = () => {
           </div>
         </main>
       </div>
+      <Watermark />
     </div>
   );
 };
@@ -3556,10 +4010,76 @@ style.innerHTML = `
     radial-gradient(circle at 82% 12%, rgba(20, 184, 166, 0.12), transparent 38%),
     radial-gradient(circle at 22% 78%, rgba(56, 189, 248, 0.12), transparent 40%),
     linear-gradient(180deg, #f8fafc 0%, #eef2f7 55%, #f1f5f9 100%);
+  background-size: 200% 200%;
+  animation: flowDrift 18s ease-in-out infinite alternate;
+  transition: background 0.35s ease;
 }
 .page-bg ::selection {
   background: rgba(249, 115, 22, 0.18);
   color: #0f172a;
+}
+.watermark {
+  color: #0f172a;
+}
+.page-enter {
+  animation: pageIn 0.45s ease both;
+}
+@keyframes pageIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes flowDrift {
+  0% {
+    background-position: 0% 20%;
+  }
+  100% {
+    background-position: 100% 80%;
+  }
+}
+@keyframes flowIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+.animate-fade-in {
+  animation: flowIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.card-surface,
+.main-surface,
+.header-surface,
+.metric-surface,
+.pill,
+.step-chip,
+.input {
+  transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease,
+    color 0.25s ease, transform 0.2s ease;
+  will-change: transform;
+}
+.card-surface:hover,
+.main-surface:hover {
+  transform: translateY(-3px);
+}
+.metric-surface:hover {
+  transform: translateY(-2px);
+}
+.step-chip:hover {
+  transform: translateY(-1px);
+}
+button:active {
+  transform: translateY(1px);
 }
 .theme-dark body {
   color: #e2e8f0;
@@ -3571,6 +4091,10 @@ style.innerHTML = `
     radial-gradient(circle at 82% 12%, rgba(56, 189, 248, 0.08), transparent 38%),
     radial-gradient(circle at 22% 78%, rgba(45, 212, 191, 0.1), transparent 40%),
     linear-gradient(180deg, #0b1220 0%, #0f172a 60%, #111827 100%);
+  background-size: 200% 200%;
+}
+.theme-dark .watermark {
+  color: #f8fafc;
 }
 .theme-dark .header-surface {
   background: rgba(15, 23, 42, 0.82);
@@ -3646,6 +4170,10 @@ style.innerHTML = `
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
+.input.rounded-r-none {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
 .input::placeholder {
   color: #94a3b8;
 }
@@ -3672,6 +4200,10 @@ style.innerHTML = `
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
   border-color: rgba(16, 185, 129, 0.85);
 }
+.theme-dark .input.rounded-r-none {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
 .no-spinner::-webkit-outer-spin-button,
 .no-spinner::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -3682,6 +4214,23 @@ style.innerHTML = `
   appearance: textfield;
 }
 @media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: none !important;
+  }
+  .page-bg {
+    animation: none !important;
+  }
+  .card-surface,
+  .main-surface,
+  .header-surface,
+  .metric-surface,
+  .pill,
+  .step-chip,
+  .input,
+  button {
+    transition: none !important;
+    transform: none !important;
+  }
   .animate-fade-in {
     animation: none !important;
   }
