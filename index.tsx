@@ -1156,7 +1156,7 @@ const Watermark = () => (
       <span className="block h-[3px]" aria-hidden="true" />
       <span>(STF e STJ) da Secretaria Especial da Presidência</span>
       <span className="block h-[3px]" aria-hidden="true" />
-      <span>Elvertoni Martelli Coimbr</span>
+      <span>Elvertoni Martelli Coimbra</span>
       <span className="block h-[3px]" aria-hidden="true" />
       <span>Luís Gustavo Arruda Lançoni</span>
       <span className="block h-[3px]" aria-hidden="true" />
