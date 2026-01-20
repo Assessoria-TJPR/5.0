@@ -1212,6 +1212,7 @@ const App = () => {
   const triageLoggedRef = useRef(false);
   const triageLogInFlightRef = useRef(false);
   const autoApprovedRequestsRef = useRef<Set<string>>(new Set());
+  const verificationActionRef = useRef(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileDraft, setProfileDraft] = useState({ name: '', photoURL: '' });
   const [profileNotice, setProfileNotice] = useState('');
@@ -1272,11 +1273,20 @@ const App = () => {
           await signOut(auth);
           return;
         }
+        try {
+          await reload(user);
+        } catch (err) {
+          if (active) {
+            setAuthError(formatAuthError(err));
+          }
+        }
         if (!user.emailVerified) {
           if (active) {
             setBlockedNotice('Confirme o e-mail para acessar a plataforma.');
           }
-          await signOut(auth);
+          if (!verificationActionRef.current) {
+            await signOut(auth);
+          }
           return;
         }
         const normalized = normalizeEmail(email);
@@ -1363,6 +1373,46 @@ const App = () => {
     setLastSavedAt(stored.savedAt);
     setStep(0);
   }, [storageKey]);
+
+  useEffect(() => {
+    if (!authUser || !db || !auth) return;
+    const userRef = doc(db, USERS_COLLECTION, authUser.uid);
+    const unsub = onSnapshot(
+      userRef,
+      (snap) => {
+        if (!authUser.emailVerified) return;
+        if (!snap.exists()) {
+          setBlockedNotice('Perfil não encontrado. Procure um administrador.');
+          void signOut(auth);
+          return;
+        }
+        const data = snap.data() as Partial<UserProfile>;
+        const role = data.role === 'admin' ? 'admin' : 'user';
+        const nextProfile: UserProfile = {
+          uid: authUser.uid,
+          email: data.email ?? authUser.email ?? '',
+          name: data.name ?? authUser.displayName ?? '',
+          photoURL: data.photoURL ?? authUser.photoURL ?? '',
+          role,
+          active: data.active ?? true,
+          triageCount: data.triageCount ?? 0,
+          theme: parseTheme(data.theme),
+          createdAt: data.createdAt ?? '',
+          updatedAt: data.updatedAt ?? '',
+        };
+        if (!nextProfile.active) {
+          setBlockedNotice('Conta desativada. Procure um administrador.');
+          void signOut(auth);
+          return;
+        }
+        setProfile(nextProfile);
+      },
+      (err) => {
+        setAuthError(formatAuthError(err));
+      }
+    );
+    return () => unsub();
+  }, [authUser?.uid, authUser?.emailVerified, db, auth]);
 
   useEffect(() => {
     if (!isAdmin || !db) {
@@ -1532,9 +1582,9 @@ const App = () => {
   }, [theme, isDarkTheme, authUser?.uid]);
 
   const outputs = useMemo(() => computeOutputs(state), [state]);
-  const summaryText = useMemo(() => buildResumoText(state, outputs), [state, outputs]);
   const consequencias = useMemo(() => buildConsequencias(state, outputs), [state, outputs]);
   const fieldErrors = useMemo(() => computeFieldErrors(state, outputs), [state, outputs]);
+  const getSummaryText = () => buildResumoText(state, outputs);
   const stepErrorCounts = useMemo(() => {
     const counts: Record<StepId, number> = {
       recurso: 0,
@@ -1562,6 +1612,10 @@ const App = () => {
   }, [adminFilter, adminUsers]);
   const totalTriages = useMemo(
     () => adminUsers.reduce((total, user) => total + (user.triageCount || 0), 0),
+    [adminUsers]
+  );
+  const activeAdminCount = useMemo(
+    () => adminUsers.filter((user) => user.role === 'admin' && user.active).length,
     [adminUsers]
   );
   const triageLeaderboard = useMemo(() => {
@@ -1655,18 +1709,21 @@ const App = () => {
   };
 
   useEffect(() => {
-    try {
-      const now = new Date();
-      const payload: StoredPayload = {
-        __version: STORAGE_VERSION,
-        state,
-        savedAt: now.toISOString(),
-      };
-      localStorage.setItem(storageKey, JSON.stringify(payload));
-      setLastSavedAt(now);
-    } catch {
-      /* ignore */
-    }
+    const timer = window.setTimeout(() => {
+      try {
+        const now = new Date();
+        const payload: StoredPayload = {
+          __version: STORAGE_VERSION,
+          state,
+          savedAt: now.toISOString(),
+        };
+        localStorage.setItem(storageKey, JSON.stringify(payload));
+        setLastSavedAt(now);
+      } catch {
+        /* ignore */
+      }
+    }, 400);
+    return () => window.clearTimeout(timer);
   }, [state, storageKey]);
 
   useEffect(() => {
@@ -1723,6 +1780,7 @@ const App = () => {
 
   const downloadResumo = () => {
     void recordTriageCompletion();
+    const summaryText = getSummaryText();
     const blob = new Blob([summaryText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1754,6 +1812,7 @@ const App = () => {
 
   const copyResumo = async () => {
     void recordTriageCompletion();
+    const summaryText = getSummaryText();
     const ok = await copyText(summaryText);
     if (ok) {
       setCopied(true);
@@ -1774,13 +1833,34 @@ const App = () => {
     }
   };
 
+  const getVerificationUser = async (missingPasswordMessage: string) => {
+    if (!auth) return null;
+    const current = auth.currentUser;
+    if (current) return current;
+    if (!authEmailLocal.trim()) {
+      setAuthError(`Informe seu usuário @${allowedEmailDomain}.`);
+      return null;
+    }
+    if (!authPassword.trim()) {
+      setAuthError(missingPasswordMessage);
+      return null;
+    }
+    if (!isAllowedEmail(authEmailValue)) {
+      setAuthError(`Use um e-mail @${allowedEmailDomain} para continuar.`);
+      return null;
+    }
+    await setPersistence(auth, rememberLogin ? browserLocalPersistence : browserSessionPersistence);
+    const cred = await signInWithEmailAndPassword(auth, authEmailValue, authPassword);
+    return cred.user;
+  };
+
   const handleLogin = async () => {
     if (!auth) return;
     setAuthBusy(true);
     setAuthError('');
     setAuthMessage('');
     if (!authEmailLocal.trim()) {
-      setAuthError('Informe seu usuário @tjpr.jus.br.');
+      setAuthError(`Informe seu usuário @${allowedEmailDomain}.`);
       setAuthBusy(false);
       return;
     }
@@ -1805,7 +1885,7 @@ const App = () => {
     setAuthError('');
     setAuthMessage('');
     if (!authEmailLocal.trim()) {
-      setAuthError('Informe seu usuário @tjpr.jus.br.');
+      setAuthError(`Informe seu usuário @${allowedEmailDomain}.`);
       setAuthBusy(false);
       return;
     }
@@ -1852,7 +1932,7 @@ const App = () => {
     setAuthError('');
     setAuthMessage('');
     if (!authEmailLocal.trim()) {
-      setAuthError('Informe seu usuário @tjpr.jus.br.');
+      setAuthError(`Informe seu usuário @${allowedEmailDomain}.`);
       setAuthBusy(false);
       return;
     }
@@ -1872,30 +1952,45 @@ const App = () => {
   };
 
   const handleResendVerification = async () => {
-    if (!auth || !authUser) return;
+    if (!auth) return;
     if (resendCooldown > 0) return;
     setAuthBusy(true);
     setAuthError('');
     setAuthMessage('');
+    verificationActionRef.current = true;
     try {
-      await sendEmailVerification(authUser);
+      const user = await getVerificationUser('Informe sua senha para reenviar a confirmação.');
+      if (!user) return;
+      await sendEmailVerification(user);
       setResendCooldown(15);
       setAuthMessage('E-mail de confirmação reenviado.');
     } catch (err) {
       setAuthError(formatAuthError(err));
     } finally {
+      const currentUser = auth.currentUser;
+      if (currentUser && !currentUser.emailVerified) {
+        try {
+          await signOut(auth);
+        } catch {
+          /* ignore */
+        }
+      }
+      verificationActionRef.current = false;
       setAuthBusy(false);
     }
   };
 
   const handleCheckVerification = async () => {
-    if (!auth || !authUser) return;
+    if (!auth) return;
     setAuthBusy(true);
     setAuthError('');
     setAuthMessage('');
+    verificationActionRef.current = true;
     try {
-      await reload(authUser);
-      if (authUser.emailVerified) {
+      const user = await getVerificationUser('Informe sua senha para confirmar o e-mail.');
+      if (!user) return;
+      await reload(user);
+      if (user.emailVerified) {
         setAuthMessage('E-mail confirmado. Você já pode entrar.');
       } else {
         setAuthError('E-mail ainda não confirmado.');
@@ -1903,6 +1998,15 @@ const App = () => {
     } catch (err) {
       setAuthError(formatAuthError(err));
     } finally {
+      const currentUser = auth.currentUser;
+      if (currentUser && !currentUser.emailVerified) {
+        try {
+          await signOut(auth);
+        } catch {
+          /* ignore */
+        }
+      }
+      verificationActionRef.current = false;
       setAuthBusy(false);
     }
   };
@@ -1938,13 +2042,16 @@ const App = () => {
   const handleSaveUser = async (user: UserProfile) => {
     if (!db || !auth) return;
     const draft = getAdminDraft(user);
-    const adminCount = adminUsers.filter((item) => item.role === 'admin').length;
     const isSelf = authUser?.uid === user.uid;
-    if (isSelf && adminCount <= 1 && draft.role !== 'admin') {
-      setAdminNotice('Você é o último admin. Não é possível remover seu próprio acesso.');
+    const wasActiveAdmin = user.role === 'admin' && user.active;
+    const willBeActiveAdmin = draft.role === 'admin' && draft.active;
+    const nextActiveAdminCount =
+      activeAdminCount - (wasActiveAdmin ? 1 : 0) + (willBeActiveAdmin ? 1 : 0);
+    if (isSelf && nextActiveAdminCount < 1) {
+      setAdminNotice('Você é o último admin ativo. Não é possível remover seu próprio acesso.');
       return;
     }
-    if (adminCount <= 1 && user.role === 'admin' && draft.role !== 'admin') {
+    if (nextActiveAdminCount < 1) {
       setAdminNotice('É necessário manter pelo menos um admin ativo.');
       return;
     }
@@ -1986,13 +2093,12 @@ const App = () => {
 
   const handleDemoteFromAdmin = async (user: UserProfile) => {
     if (!db) return;
-    const adminCount = adminUsers.filter((item) => item.role === 'admin').length;
     const isSelf = authUser?.uid === user.uid;
     if (isSelf) {
       setAdminNotice('Você não pode remover seu próprio acesso de admin.');
       return;
     }
-    if (adminCount <= 1) {
+    if (user.active && activeAdminCount <= 1) {
       setAdminNotice('É necessário manter pelo menos um admin ativo.');
       return;
     }
@@ -2256,7 +2362,7 @@ const App = () => {
   const handleDeleteUser = async (user: UserProfile) => {
     if (!auth || !authUser || !db) return;
     if (authUser.uid === user.uid) {
-      setDeleteError('Não é possível excluir o próprio usuário.');
+      setDeleteError('Não é possível desativar o próprio usuário.');
       return;
     }
     if (!authUser.email) {
@@ -2264,7 +2370,7 @@ const App = () => {
       return;
     }
     if (!deletePassword.trim()) {
-      setDeleteError('Informe sua senha para confirmar a exclusão.');
+      setDeleteError('Informe sua senha para confirmar a desativação.');
       return;
     }
     setDeleteError('');
@@ -2272,10 +2378,19 @@ const App = () => {
     try {
       const credential = EmailAuthProvider.credential(authUser.email, deletePassword);
       await reauthenticateWithCredential(authUser, credential);
-      await deleteDoc(doc(db, USERS_COLLECTION, user.uid));
-      setAdminNotice('Usuário excluído da base.');
+      const now = new Date().toISOString();
+      await updateDoc(doc(db, USERS_COLLECTION, user.uid), {
+        active: false,
+        updatedAt: now,
+        deletedAt: now,
+      });
+      setAdminNotice('Usuário desativado.');
       setDeleteTargetUid(null);
       setDeletePassword('');
+      setAdminEdits((prev) => {
+        if (!prev[user.uid]) return prev;
+        return { ...prev, [user.uid]: { ...prev[user.uid], active: false } };
+      });
     } catch (err) {
       setDeleteError(formatAuthError(err));
     } finally {
@@ -2318,7 +2433,7 @@ const App = () => {
   };
 
   const renderAuth = () => {
-    const needsProfile = Boolean(authUser && !profile);
+    const needsProfile = Boolean(authUser && !profile && !blockedNotice);
     return (
       <div className="min-h-screen page-bg text-slate-900 page-enter">
         <div className="min-h-screen flex items-center justify-center px-4 py-10">
@@ -2680,7 +2795,6 @@ const App = () => {
 
   const renderAdminPanel = () => {
     if (!isAdmin || !adminOpen) return null;
-    const adminCount = adminUsers.filter((user) => user.role === 'admin').length;
     return (
       <div className="mb-6 space-y-4">
         <SectionCard title="Dashboard de triagens">
@@ -2762,7 +2876,7 @@ const App = () => {
                 onChange={(e) => setAdminFilter(e.target.value)}
               />
               <Pill>{adminUsers.length} usuário(s)</Pill>
-              <Pill tone="success">{adminCount} admin(s)</Pill>
+              <Pill tone="success">{activeAdminCount} admin(s) ativos</Pill>
             </div>
             {adminNotice && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
@@ -2776,12 +2890,13 @@ const App = () => {
                 {filteredUsers.map((user) => {
                   const draft = getAdminDraft(user);
                   const isSelf = authUser?.uid === user.uid;
-                  const disableRoleChange = isSelf && adminCount <= 1;
+                  const isActiveAdmin = user.role === 'admin' && user.active;
+                  const disableRoleChange = isSelf && isActiveAdmin && activeAdminCount <= 1;
                   const deleteOpen = deleteTargetUid === user.uid;
                   const disableDelete = isSelf;
                   const canPromote = user.role !== 'admin' && draft.role !== 'admin';
                   const canDemote = user.role === 'admin' && draft.role === 'admin';
-                  const disableDemote = isSelf || adminCount <= 1;
+                  const disableDemote = isSelf || (isActiveAdmin && activeAdminCount <= 1);
                   return (
                     <div
                       key={user.uid}
@@ -2823,7 +2938,7 @@ const App = () => {
                           </select>
                           {disableRoleChange && (
                             <span className="text-xs text-slate-500">
-                              Você é o único admin cadastrado.
+                              Você é o único admin ativo.
                             </span>
                           )}
                         </InputLabel>
@@ -2881,14 +2996,14 @@ const App = () => {
                           disabled={disableDelete}
                           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition shadow-sm disabled:opacity-60"
                         >
-                          {deleteOpen ? 'Cancelar exclusão' : 'Excluir usuário'}
+                          {deleteOpen ? 'Cancelar desativação' : 'Desativar usuário'}
                         </button>
                       </div>
                       {deleteOpen && (
                         <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-700">
-                          <p className="font-semibold">Confirmação de exclusão</p>
+                          <p className="font-semibold">Confirmação de desativação</p>
                           <p className="mt-1">
-                            Para excluir este usuário, informe sua senha de administrador.
+                            Para desativar este usuário, informe sua senha de administrador.
                           </p>
                           {deleteError && <p className="mt-2 text-xs text-rose-700">{deleteError}</p>}
                           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -2912,7 +3027,7 @@ const App = () => {
                               disabled={deleteBusyUid === user.uid}
                               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-700 transition shadow-sm disabled:opacity-60"
                             >
-                              {deleteBusyUid === user.uid ? 'Excluindo...' : 'Excluir'}
+                              {deleteBusyUid === user.uid ? 'Desativando...' : 'Desativar'}
                             </button>
                           </div>
                         </div>
@@ -3182,6 +3297,17 @@ const App = () => {
                       </div>
                     </div>
                   )}
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <a
+                    href="https://assessoria-tjpr.github.io/prazos.tjpr.p-sep-ar.interno/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-600 text-white hover:bg-red-700 hover:shadow-sm transition"
+                  >
+                    Abrir calculadora de prazos
+                    <ArrowRight className="w-4 h-4" />
+                  </a>
                 </div>
               </SectionCard>
               <SectionCard title="Critérios usados">
@@ -4446,21 +4572,21 @@ button:active {
   border-color: rgba(148, 163, 184, 0.35);
 }
 .theme-dark .input {
-  background: rgba(15, 23, 42, 0.85);
-  border-color: rgba(148, 163, 184, 0.4);
-  color: #e2e8f0;
-  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.6);
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(148, 163, 184, 0.55);
+  color: #0f172a;
+  box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.08);
 }
 .theme-dark select.input {
-  background-color: rgba(15, 23, 42, 0.85) !important;
-  color: #e2e8f0;
+  background-color: rgba(255, 255, 255, 0.92) !important;
+  color: #0f172a;
 }
 .theme-dark select.input option {
-  background-color: #0f172a;
-  color: #e2e8f0;
+  background-color: #ffffff;
+  color: #0f172a;
 }
 .theme-dark .input::placeholder {
-  color: rgba(148, 163, 184, 0.8);
+  color: #64748b;
 }
 .theme-dark .input:focus {
   box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
