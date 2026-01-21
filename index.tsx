@@ -68,6 +68,7 @@ type CamaraArea = 'Cível' | 'Crime' | '';
 type ParcialOpcao = '' | 'não' | 'JG parcial' | 'COHAB Londrina' | 'outros';
 type UserRole = 'admin' | 'user';
 type ThemeMode = 'light' | 'dark' | 'system';
+type ProcCheck = 'confere' | 'diverge' | '';
 
 type UserProfile = {
   uid: string;
@@ -105,10 +106,12 @@ type TriagemState = {
   camaraArea: CamaraArea;
   camaraNumero: string;
   emaberto: YesNo;
+  sfh: YesNo;
   envio: string;
   consulta: YesNo;
   leitura: string;
   emdobro: 'simples' | 'em dobro' | '';
+  eca: YesNo;
   multa: Multa;
   motivo: 'Fazenda Pública ou justiça gratuita' | 'é o próprio objeto do recurso' | 'não identificado' | '';
   dispensa: YesNo;
@@ -127,10 +130,12 @@ type TriagemState = {
   apos16: YesNo;
   grumov: string;
   grumovComp: string;
+  gruProc: ProcCheck;
   valorst: string;
   guiavinc: YesNo;
   guia: YesNo;
   funjusmov: string;
+  funjusProc: ProcCheck;
   guiorig: YesNo;
   comp: YesNo;
   comptipo: 'de pagamento' | 'de agendamento' | '';
@@ -148,6 +153,7 @@ type TriagemState = {
   suspefeito: 'não requerido' | 'requerido no corpo do recurso' | 'requerido em petição apartada' | '';
   autuado: YesNo;
   exclusivi: 'requerida' | 'não requerida' | '';
+  exclusNome: string;
   cadastrada: YesNo;
   regular: YesNo;
   contrarra: Contrarrazoes;
@@ -210,10 +216,12 @@ const initialState: TriagemState = {
   camaraArea: '',
   camaraNumero: '',
   emaberto: '',
+  sfh: 'não',
   envio: '',
   consulta: 'não',
   leitura: '',
   emdobro: '',
+  eca: 'não',
   multa: '',
   motivo: '',
   dispensa: '',
@@ -227,12 +235,14 @@ const initialState: TriagemState = {
   apos16: '',
   grumov: '',
   grumovComp: '',
+  gruProc: '',
   valorst: '',
   guiavinc: '',
   guia: '',
   guiorig: '',
   comp: '',
   funjusmov: '',
+  funjusProc: '',
   comptipo: '',
   codbar: '',
   valorfj: '',
@@ -248,6 +258,7 @@ const initialState: TriagemState = {
   suspefeito: '',
   autuado: '',
   exclusivi: '',
+  exclusNome: '',
   cadastrada: '',
   regular: '',
   contrarra: '',
@@ -272,6 +283,7 @@ type Tempestividade = {
   comeco?: Date;
   venc?: Date;
   prazo?: number;
+  prazoTipo?: 'úteis' | 'corridos';
   mensagem?: string;
 };
 
@@ -306,11 +318,11 @@ const isBusinessDay = (date: Date) => {
   if (day === 0 || day === 6) return false;
   return !isHoliday(date);
 };
-const isCountableDay = (date: Date) => isBusinessDay(date) && !isProrrogacao(date);
+const isCountableDay = (date: Date) => isBusinessDay(date);
 
-const nextBusinessDay = (date: Date) => {
+const nextBusinessDay = (date: Date, options: { skipProrrogacao?: boolean } = {}) => {
   let current = toBusinessDate(date);
-  while (!isBusinessDay(current)) {
+  while (!isBusinessDay(current) || (options.skipProrrogacao && isProrrogacao(current))) {
     current = addDays(current, 1);
   }
   return current;
@@ -482,32 +494,43 @@ const formatAuthError = (error: unknown) => {
   }
 };
 
+const addBusinessDays = (start: Date, days: number) => {
+  if (days <= 1) return start;
+  let current = start;
+  let counted = 1;
+  while (counted < days) {
+    current = addDays(current, 1);
+    if (isCountableDay(current)) counted += 1;
+  }
+  return current;
+};
+
 const computeTempestividade = (state: TriagemState): Tempestividade => {
   const envio = parseInputDate(state.envio);
   const interp = parseInputDate(state.interp);
   if (!envio || !interp) {
     return { status: 'pendente', mensagem: 'Preencha envio da intimação e interposição.' };
   }
-  const prazo = state.emdobro === 'em dobro' ? 30 : 15;
+  const prazoBase = state.eca === 'sim' ? 10 : 15;
+  const prazo = state.emdobro === 'em dobro' ? prazoBase * 2 : prazoBase;
+  const prazoTipo = state.eca === 'sim' ? 'corridos' : 'úteis';
   const leitura = state.consulta === 'sim' ? parseInputDate(state.leitura) : null;
   const auto = addDays(envio, 10);
   const intimBase = leitura && leitura <= auto ? leitura : auto;
   const intim = nextBusinessDay(intimBase);
   let comeco = addDays(intim, 1);
-  while (!isCountableDay(comeco)) {
-    comeco = addDays(comeco, 1);
+  if (prazoTipo === 'úteis') {
+    comeco = nextBusinessDay(comeco, { skipProrrogacao: true });
+  } else if (isProrrogacao(comeco)) {
+    comeco = nextBusinessDay(addDays(comeco, 1), { skipProrrogacao: true });
   }
-  let venc = comeco;
-  const contagem: Date[] = [venc];
-  while (contagem.length < prazo) {
-    venc = addDays(venc, 1);
-    while (!isCountableDay(venc)) {
-      venc = addDays(venc, 1);
-    }
-    contagem.push(venc);
+  let venc =
+    prazoTipo === 'corridos' ? addDays(comeco, Math.max(0, prazo - 1)) : addBusinessDays(comeco, prazo);
+  if (!isBusinessDay(venc) || isProrrogacao(venc)) {
+    venc = nextBusinessDay(addDays(venc, 1), { skipProrrogacao: true });
   }
   const status = interp <= venc ? 'tempestivo' : 'intempestivo';
-  return { status, intim, comeco, venc, prazo };
+  return { status, intim, comeco, venc, prazo, prazoTipo };
 };
 
 type Outputs = {
@@ -528,60 +551,171 @@ type Outputs = {
   observacoes: string[];
 };
 
-const buildResumoText = (state: TriagemState, outputs: Outputs) => {
-  const safe = (v: string) => (v ? v : '—');
-  const valorFJValue = state.valorfj.trim();
-  const valorFJNum = Number(valorFJValue || 0);
-  const funjusBelow =
-    state.dispensa === 'não' &&
-    state.gratuidade === 'não invocada' &&
-    valorFJValue !== '' &&
-    Number.isFinite(valorFJNum) &&
-    valorFJNum < outputs.deverFJ;
-  const lines: string[] = [
-    'Resumo - Portal de Triagem',
-    `Data: ${new Date().toLocaleString('pt-BR')}`,
-    `Sigla: ${safe(state.sigla)}`,
-    '',
-    `Tipo: ${safe(state.tipo)}`,
-    `Interposição: ${safe(state.interp)}`,
-    `Decisão recorrida: ${safe(state.decrec)}`,
-    `Câmara: ${safe(camaraLabel(state))}`,
-    '',
-    `Tempestivo: ${outputs.tempest.status}`,
-    `Intimação: ${formatDate(outputs.tempest.intim)}`,
-    `Começo do prazo: ${formatDate(outputs.tempest.comeco)}`,
-    `Prazo: ${outputs.tempest.prazo || '—'} dias`,
-    `Vencimento: ${formatDate(outputs.tempest.venc)}`,
-    '',
-    `GRU: ${outputs.grout}`,
-    `Funjus: ${outputs.funjout}`,
-    `Pagamento parcial: ${outputs.parcialout}`,
-    `Valores devidos - ${outputs.stLabel}: ${formatCurrency(outputs.deverST)} | FUNJUS: ${formatCurrency(
-      outputs.deverFJ
-    )}`,
-    `Base de custas: ${outputs.stLabel} ${formatIsoDate(outputs.stRateStart)} | FUNJUS ${formatIsoDate(
-      outputs.fjRateStart
-    )}`,
-    '',
-    `Procuração/Nomeação: ${outputs.procurout}`,
-    `Exclusividade na intimação: ${outputs.exclusout}`,
-    `Efeito suspensivo: ${outputs.suspefout}`,
-    '',
-    `Contrarrazões: ${outputs.controut}`,
-    `Ministério Público: ${outputs.mpout}`,
+type ResumoRow = { label: string; value: string };
+
+const formatResumoMov = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return trimmed.toLowerCase().startsWith('mov.') ? trimmed : `Mov. ${trimmed}`;
+};
+const formatTempestivoResumo = (status: Tempestividade['status']) => {
+  if (status === 'tempestivo') return 'Sim';
+  if (status === 'intempestivo') return 'Não';
+  return '';
+};
+const formatMpTeorResumo = (value?: MPTeor) => {
+  switch (value) {
+    case 'mera ciência':
+      return 'ciência';
+    case 'pela admissão':
+      return 'admissão';
+    case 'pela inadmissão':
+      return 'inadmissão';
+    case 'ausência de interesse':
+      return 'sem interesse';
+    default:
+      return '';
+  }
+};
+
+const formatDateSlash = (date?: Date) => {
+  if (!date) return '';
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
+const buildResumoData = (state: TriagemState, outputs: Outputs) => {
+  const headerLeft = `${state.sigla?.trim() || '—'} – ${camaraLabel(state)}`;
+  const interpDate = parseInputDate(state.interp);
+  const headerRight = formatDateSlash(interpDate ?? undefined);
+
+  const contrarraResumo = (() => {
+    if (!state.contrarra) return '';
+    if (state.contrarra === 'apresentadas' || state.contrarra === 'ausente alguma') {
+      return state.contramovis.trim() ? formatResumoMov(state.contramovis) : 'Apresentadas';
+    }
+    if (state.contrarra === 'ausentes') {
+      if (state.semadv === 'sim') return 'Sem advogado';
+      if (state.intimado === 'não') return 'Não intimado';
+      if (state.crraberto === 'sim') return 'Prazo em aberto';
+      return 'Ausentes';
+    }
+    return '';
+  })();
+
+  const mpResumo = (() => {
+    if (state.emepe === 'não') return 'não';
+    if (state.mani === 'sim') {
+      const mov = state.manimovis.trim() ? formatResumoMov(state.manimovis) : '';
+      const teor = formatMpTeorResumo(state.teormani);
+      const suffix =
+        state.tipo === 'Especial' ? 'Resp' : state.tipo === 'Extraordinário' ? 'Rext' : '';
+      const suffixText = suffix && mov ? ` (${suffix})` : '';
+      if (mov && teor) return `${mov}${suffixText} (${teor})`;
+      if (mov) return `${mov}${suffixText}`;
+      return teor || 'sim';
+    }
+    return '';
+  })();
+
+  const gratuidadeResumo = (() => {
+    if (state.dispensa === 'sim') return 'Dispensado';
+    if (state.gratuidade === 'presumida (defensor público, dativo ou NPJ)') return 'JG presumida';
+    if (state.gratuidade === 'já é ou afirma ser beneficiário') {
+      if (state.deferida === 'sim') {
+        return state.movdef.trim() ? `JG Ok. Mov: ${state.movdef.trim()}` : 'JG Ok.';
+      }
+      if (state.requerida === 'sim') {
+        return state.movped.trim() ? `JG requerida. Mov: ${state.movped.trim()}` : 'JG requerida';
+      }
+      return 'JG requerida';
+    }
+    if (state.gratuidade === 'requer no recurso em análise') return 'JG requerida no recurso';
+    if (state.gratuidade === 'é o próprio objeto do recurso') return 'JG é objeto do recurso';
+    return '';
+  })();
+
+  const gruResumo = (() => {
+    if (gratuidadeResumo) return gratuidadeResumo;
+    const guiaMov = state.grumov.trim();
+    const compMov = state.grumovComp.trim();
+    if (guiaMov && compMov) {
+      if (guiaMov === compMov) return `Guia + Comp : Mov. ${guiaMov}`;
+      return `Guia ${formatResumoMov(guiaMov)}; Comp ${formatResumoMov(compMov)}`;
+    }
+    if (guiaMov || compMov) return formatResumoMov(guiaMov || compMov);
+    return '';
+  })();
+
+  const funjusResumo = (() => {
+    if (gratuidadeResumo) return gratuidadeResumo;
+    const mov = state.funjusmov.trim();
+    if (state.guia === 'sim' && state.comp === 'sim') {
+      return mov ? `Guia + Comp : Mov. ${mov}` : 'Guia + Comp';
+    }
+    if (state.guia === 'sim' && state.comp === 'não') {
+      return mov ? `Guia ${formatResumoMov(mov)}; Comp ausente` : 'Guia ok; Comp ausente';
+    }
+    if (state.guia === 'não' && state.comp === 'sim') {
+      return mov ? `Comp ${formatResumoMov(mov)}; Guia ausente` : 'Comp ok; Guia ausente';
+    }
+    if (mov) return formatResumoMov(mov);
+    return '';
+  })();
+
+  const procuracaoResumo = (() => {
+    if (state.subscritor === 'procurador público' || state.subscritor === 'advogado em causa própria') {
+      return state.subscritor ? state.subscritor : '';
+    }
+    if (state.subscritor === 'procurador nomeado') {
+      return state.nomemovi.trim() ? formatResumoMov(state.nomemovi) : '';
+    }
+    if (state.subscritor === 'advogado particular') {
+      return state.movis.trim() ? formatResumoMov(state.movis) : '';
+    }
+    return '';
+  })();
+
+  const exclusResumo = (() => {
+    if (state.exclusivi === 'não requerida') return 'Não';
+    if (state.exclusivi === 'requerida') return state.exclusNome.trim() || 'Requerida';
+    return '';
+  })();
+
+  const decisaoResumo = (() => {
+    if (state.decrec === 'colegiada/acórdão') return 'sim';
+    if (state.decrec === 'monocrática/singular') return 'não';
+    return '';
+  })();
+
+  const obsList = [...outputs.observacoes];
+  if (state.funjusObs.trim()) obsList.push(`Justificativa Funjus: ${state.funjusObs.trim()}`);
+  const obsTexto = obsList.length ? obsList.join(' | ') : '';
+  const obsCell = obsTexto ? `OBS: ${obsTexto}` : 'OBS: //';
+
+  const rows: ResumoRow[] = [
+    {
+      label: outputs.tempest.status === 'pendente' ? 'Tempestivo?' : 'Tempestivo',
+      value: formatTempestivoResumo(outputs.tempest.status),
+    },
+    { label: 'Contrarrazões', value: contrarraResumo },
+    { label: 'Ministério Público?', value: mpResumo },
+    { label: 'GRU:', value: gruResumo },
+    { label: 'Funjus:', value: funjusResumo },
+    { label: 'Procuração:', value: procuracaoResumo },
+    { label: 'Exclusividade na intimação?', value: exclusResumo },
+    { label: 'Decisão colegiada?', value: decisaoResumo },
+    { label: obsCell, value: obsCell },
   ];
-  if (outputs.observacoes.length) {
-    lines.push('', 'Observações/Minutas:');
-    outputs.observacoes.forEach((obs, idx) => lines.push(`${idx + 1}. ${obs}`));
-  }
-  if (funjusBelow && state.funjusObs.trim()) {
-    lines.push('', `Justificativa Funjus: ${state.funjusObs.trim()}`);
-  }
-  if (state.anotacoes.trim()) {
-    lines.push('', 'Notas manuais:', state.anotacoes.trim());
-  }
-  return lines.join('\n');
+
+  return { headerLeft, headerRight, rows };
+};
+
+const buildResumoText = (state: TriagemState, outputs: Outputs) => {
+  const { headerLeft, headerRight, rows } = buildResumoData(state, outputs);
+  return [`${headerLeft} | ${headerRight}`, ...rows.map((row) => `${row.label} | ${row.value}`)].join('\n');
 };
 
 const buildGratuidadeOutput = (state: TriagemState) => {
@@ -733,6 +867,9 @@ const computeOutputs = (state: TriagemState): Outputs => {
   } else if (prazoEmDobroAusente) {
     observacoes.push('Prazo em dobro aplicável (MP/Defensoria/NPJ/dativo/ente público).');
   }
+  if (state.sfh === 'sim') {
+    observacoes.push('SFH pós 24/03/2024: enviar para filtro específico.');
+  }
   if (state.emaberto !== 'sim' && state.contrarra && state.contrarra !== 'ausentes' && !state.contramovis.trim()) {
     observacoes.push('Informar movimento da juntada das contrarrazões/renúncia.');
   }
@@ -750,6 +887,12 @@ const computeOutputs = (state: TriagemState): Outputs => {
   }
   if (!custasDispensadas && state.comp === 'sim' && state.codbar === 'diverge ou guia ausente') {
     observacoes.push('Código de barras divergente/guia ausente: conferir preparo FUNJUS.');
+  }
+  if (!custasDispensadas && state.gruProc === 'diverge') {
+    observacoes.push('Número do processo divergente na GRU: conferir guia.');
+  }
+  if (!custasDispensadas && state.funjusProc === 'diverge') {
+    observacoes.push('Número do processo divergente na guia FUNJUS.');
   }
   if (!custasDispensadas && state.comp === 'sim' && state.comptipo === 'de agendamento') {
     observacoes.push('Comprovante de agendamento não comprova pagamento; exigir comprovante.');
@@ -773,13 +916,12 @@ const computeOutputs = (state: TriagemState): Outputs => {
       observacoes.push('Determinar certificação do decurso do prazo para contrarrazões.');
     }
   }
-  if (
-    (state.emepe === 'sim' && state.mani === 'sim' && state.teormani === 'mera ciência' && state.decursomp === 'não') ||
-    (state.emepe === 'sim' && state.mani === 'não' && state.remetido === 'sim' && state.decursomp === 'não')
-  ) {
-    observacoes.push('Aguardar decurso do prazo para manifestação da PGJ.');
-  } else if (state.emepe === 'sim' && state.mani === 'não' && state.remetido === 'não') {
-    observacoes.push('Encaminhar autos à PGJ.');
+  if (state.emepe === 'sim' && state.mani === 'não') {
+    if (state.remetido === 'sim' && state.decursomp === 'não') {
+      observacoes.push('Aguardar decurso do prazo para manifestação da PGJ.');
+    } else if (state.remetido === 'não') {
+      observacoes.push('Encaminhar autos à PGJ.');
+    }
   }
 
   const recodobro =
@@ -945,10 +1087,16 @@ const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors 
     const guiaMov = state.grumov?.trim();
     const compMov = state.grumovComp?.trim();
     mark('grumov', !guiaMov && !compMov);
+    if (guiaMov || compMov) {
+      mark('gruProc', !state.gruProc);
+    }
   }
   if (state.comp === 'sim') {
     mark('comptipo', !state.comptipo);
     mark('codbar', !state.codbar);
+  }
+  if (state.guia === 'sim') {
+    mark('funjusProc', !state.funjusProc);
   }
   const valorFJValue = state.valorfj.trim();
   const valorFJNum = Number(valorFJValue || 0);
@@ -971,6 +1119,7 @@ const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors 
   if (state.suspefeito === 'requerido em petição apartada') mark('autuado', state.autuado === '');
   mark('exclusivi', state.exclusivi === '');
   if (state.exclusivi === 'requerida') {
+    mark('exclusNome', !state.exclusNome.trim());
     mark('cadastrada', state.cadastrada === '');
     if (state.cadastrada === 'não') mark('regular', state.regular === '');
   }
@@ -1030,12 +1179,14 @@ const stepFields: Record<StepId, (keyof TriagemState)[]> = {
     'comprova',
     'apos16',
     'grumov',
+    'gruProc',
     'funjusmov',
     'guia',
     'guiorig',
     'comp',
     'comptipo',
     'codbar',
+    'funjusProc',
     'funjusObs',
   ],
   processo: [
@@ -1047,6 +1198,7 @@ const stepFields: Record<StepId, (keyof TriagemState)[]> = {
     'suspefeito',
     'autuado',
     'exclusivi',
+    'exclusNome',
     'cadastrada',
     'regular',
     'contrarra',
@@ -1659,6 +1811,7 @@ const App = () => {
     });
   }, [adminRequests, adminUsers, isAdmin, db]);
   const isPublicEntity = state.dispensa === 'sim';
+  const isEca = state.eca === 'sim';
   const valorFJValue = state.valorfj.trim();
   const valorFJNum = Number(valorFJValue || 0);
   const funjusBelow =
@@ -3235,6 +3388,16 @@ const App = () => {
                       <option value="não">Não</option>
                     </select>
                   </InputLabel>
+                  <InputLabel label="SFH pós 24/03/2024 (filtro específico)?">
+                    <select
+                      className={inputClass('sfh')}
+                      value={state.sfh}
+                      onChange={(e) => handleChange('sfh', e.target.value as YesNo)}
+                    >
+                      <option value="não">Não</option>
+                      <option value="sim">Sim</option>
+                    </select>
+                  </InputLabel>
                 </div>
               </SectionCard>
               <SectionCard title="Checklist rápido">
@@ -3279,6 +3442,16 @@ const App = () => {
                       />
                     </InputLabel>
                   )}
+                  <InputLabel label="Regime do prazo">
+                    <select
+                      className={inputClass('eca')}
+                      value={state.eca}
+                      onChange={(e) => handleChange('eca', e.target.value as YesNo)}
+                    >
+                      <option value="não">CPC (dias úteis)</option>
+                      <option value="sim">ECA (dias corridos)</option>
+                    </select>
+                  </InputLabel>
                   <InputLabel label="Prazo">
                     <select
                       className={inputClass('emdobro')}
@@ -3287,8 +3460,8 @@ const App = () => {
                       onChange={(e) => handleChange('emdobro', e.target.value as TriagemState['emdobro'])}
                     >
                       <option value="">Selecione</option>
-                      <option value="simples">Simples (15 dias)</option>
-                      <option value="em dobro">Em dobro (30 dias)</option>
+                      <option value="simples">{isEca ? 'Simples (10 dias corridos)' : 'Simples (15 dias úteis)'}</option>
+                      <option value="em dobro">{isEca ? 'Em dobro (20 dias corridos)' : 'Em dobro (30 dias úteis)'}</option>
                     </select>
                   </InputLabel>
                   {isPublicEntity && (
@@ -3297,7 +3470,7 @@ const App = () => {
                     </p>
                   )}
                   <p className="md:col-span-2 text-xs text-slate-500">
-                    Use prazo em dobro apenas para Defensoria Pública, MP, NPJ ou advogado dativo.
+                    Use prazo em dobro apenas para Defensoria Pública, MP, NPJ, dativo ou ente público.
                   </p>
                 </div>
                 <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
@@ -3313,7 +3486,8 @@ const App = () => {
                         <strong>Começo do prazo:</strong> {formatDate(outputs.tempest.comeco)}
                       </div>
                       <div>
-                        <strong>Prazo:</strong> {outputs.tempest.prazo} dias
+                        <strong>Prazo:</strong>{' '}
+                        {outputs.tempest.prazo} dias {outputs.tempest.prazoTipo ?? ''}
                       </div>
                       <div>
                         <strong>Vencimento:</strong> {formatDate(outputs.tempest.venc)}
@@ -3346,8 +3520,10 @@ const App = () => {
               <SectionCard title="Critérios usados">
                 <ul className="space-y-2 text-sm text-slate-600">
                   <li>• Intimação presumida 10 dias após expedição (após vinculação no DJEN), salvo leitura antes disso.</li>
-                  <li>• Atenção ao calendário e às comprovações de feriado/prorrogação.</li>
-                  <li>• Prazo em dobro: apenas Defensoria Pública, MP, NPJ ou advogado dativo.</li>
+                  <li>• ECA: 10 dias corridos (20 em dobro, quando aplicável).</li>
+                  <li>• Considere feriados e decretos de suspensão comprovados no período.</li>
+                  <li>• Instabilidade do PROJUDI prorroga apenas se início ou término cair no dia.</li>
+                  <li>• Prazo em dobro: apenas Defensoria Pública, MP, NPJ, dativo ou ente público.</li>
                 </ul>
               </SectionCard>
             </div>
@@ -3541,6 +3717,19 @@ const App = () => {
                         onChange={(e) => handleChange('grumovComp', e.target.value)}
                       />
                     </InputLabel>
+                    {(state.grumov.trim() || state.grumovComp.trim()) && (
+                      <InputLabel label="Número do processo na GRU">
+                        <select
+                          className={inputClass('gruProc')}
+                          value={state.gruProc}
+                          onChange={(e) => handleChange('gruProc', e.target.value as ProcCheck)}
+                        >
+                          <option value="">Selecione</option>
+                          <option value="confere">Confere</option>
+                          <option value="diverge">Diverge</option>
+                        </select>
+                      </InputLabel>
+                    )}
                     <div className="md:col-span-2">
                       <InputLabel label={`Valor pago ${outputs.stLabel}/FUNJUS`}>
                         <div className="flex items-center gap-2 text-xs text-slate-600 mb-2">
@@ -3618,6 +3807,17 @@ const App = () => {
                             <option value="">Selecione</option>
                             <option value="sim">Sim</option>
                             <option value="não">Não</option>
+                          </select>
+                        </InputLabel>
+                        <InputLabel label="Número do processo na guia">
+                          <select
+                            className={inputClass('funjusProc')}
+                            value={state.funjusProc}
+                            onChange={(e) => handleChange('funjusProc', e.target.value as ProcCheck)}
+                          >
+                            <option value="">Selecione</option>
+                            <option value="confere">Confere</option>
+                            <option value="diverge">Diverge</option>
                           </select>
                         </InputLabel>
                       </>
@@ -3843,24 +4043,32 @@ const App = () => {
                   </InputLabel>
                   {state.exclusivi === 'requerida' && (
                     <>
-                    <InputLabel label="Procurador já cadastrado?">
-                      <select
-                        className={inputClass('cadastrada')}
-                        value={state.cadastrada}
-                        onChange={(e) => handleChange('cadastrada', e.target.value as YesNo)}
-                      >
+                      <InputLabel label="Nome indicado para exclusividade">
+                        <input
+                          className={inputClass('exclusNome')}
+                          placeholder="Ex.: CARLOS AUGUSTO TORTORO JUNIOR"
+                          value={state.exclusNome}
+                          onChange={(e) => handleChange('exclusNome', e.target.value)}
+                        />
+                      </InputLabel>
+                      <InputLabel label="Procurador já cadastrado?">
+                        <select
+                          className={inputClass('cadastrada')}
+                          value={state.cadastrada}
+                          onChange={(e) => handleChange('cadastrada', e.target.value as YesNo)}
+                        >
                           <option value="">Selecione</option>
                           <option value="sim">Sim</option>
                           <option value="não">Não</option>
                         </select>
                       </InputLabel>
-                    {state.cadastrada === 'não' && (
-                      <InputLabel label="Advogado regularmente constituído?">
-                        <select
-                          className={inputClass('regular')}
-                          value={state.regular}
-                          onChange={(e) => handleChange('regular', e.target.value as YesNo)}
-                        >
+                      {state.cadastrada === 'não' && (
+                        <InputLabel label="Advogado regularmente constituído?">
+                          <select
+                            className={inputClass('regular')}
+                            value={state.regular}
+                            onChange={(e) => handleChange('regular', e.target.value as YesNo)}
+                          >
                             <option value="">Selecione</option>
                             <option value="sim">Sim</option>
                             <option value="não">Não</option>
@@ -4063,64 +4271,47 @@ const App = () => {
           return (
             <div className="space-y-4">
               <SectionCard title="Resultado da triagem">
-                <div className="grid md:grid-cols-2 gap-3 text-sm text-slate-800">
-                  <div>
-                    <strong>Tempestivo:</strong> {outputs.tempest.status}
-                  </div>
-                  <div>
-                    <strong>Contrarrazões:</strong> {outputs.controut}
-                  </div>
-                  <div>
-                    <strong>Ministério Público:</strong> {outputs.mpout}
-                  </div>
-                  <div>
-                    <strong>GRU:</strong> {outputs.grout}
-                  </div>
-                  <div>
-                    <strong>Funjus:</strong> {outputs.funjout}
-                  </div>
-                  <div>
-                    <strong>Procuração/Nomeação:</strong> {outputs.procurout}
-                  </div>
-                  <div>
-                    <strong>Exclusividade na intimação:</strong> {outputs.exclusout}
-                  </div>
-                  <div>
-                    <strong>Efeito suspensivo:</strong> {outputs.suspefout}
-                  </div>
-                  <div>
-                    <strong>Pagamento parcial:</strong> {outputs.parcialout}
-                  </div>
-                  <div>
-                    <strong>Vencimento:</strong> {formatDate(outputs.tempest.venc)}
-                  </div>
-                  <div>
-                    <strong>Prazo:</strong> {outputs.tempest.prazo || '—'} dias
-                  </div>
-                  <div>
-                    <strong>Câmara:</strong> {camaraLabel(state)}
-                  </div>
-                </div>
-              </SectionCard>
-              <SectionCard title="Observações e minutas sugeridas">
-                {outputs.observacoes.length === 0 && !(funjusBelow && funjusObs) ? (
-                  <p className="text-sm text-slate-600">Nenhuma observação pendente.</p>
-                ) : (
-                  <div className="space-y-2 text-sm text-slate-700">
-                    {outputs.observacoes.length > 0 && (
-                      <ul className="list-disc pl-5 space-y-2">
-                        {outputs.observacoes.map((obs, idx) => (
-                          <li key={idx}>{obs}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {funjusBelow && funjusObs && (
-                      <p>
-                        <strong>Justificativa Funjus:</strong> {funjusObs}
-                      </p>
-                    )}
-                  </div>
-                )}
+                {(() => {
+                  const resumo = buildResumoData(state, outputs);
+                  const renderResumoCell = (value: string) => {
+                    if (!value) return '';
+                    const parts = value.split('\n');
+                    return parts.map((line, idx) => (
+                      <React.Fragment key={`${line}-${idx}`}>
+                        {line}
+                        {idx < parts.length - 1 ? <br /> : null}
+                      </React.Fragment>
+                    ));
+                  };
+                  return (
+                    <div className="space-y-3 text-sm text-slate-800">
+                      <table className="w-full border-collapse text-sm">
+                        <thead>
+                          <tr>
+                            <th className="border border-slate-200 bg-white/80 px-3 py-2 text-left font-semibold text-slate-800">
+                              {resumo.headerLeft}
+                            </th>
+                            <th className="border border-slate-200 bg-white/80 px-3 py-2 text-right font-semibold text-slate-800">
+                              {resumo.headerRight}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {resumo.rows.map((row, idx) => (
+                            <tr key={`${row.label}-${idx}`}>
+                              <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-700">
+                                {renderResumoCell(row.label)}
+                              </td>
+                              <td className="border border-slate-200 px-3 py-2 text-slate-800">
+                                {renderResumoCell(row.value)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
               </SectionCard>
               <div className="grid lg:grid-cols-2 gap-4">
                 <SectionCard title="Notas rápidas (salvas no navegador)">
@@ -4372,22 +4563,22 @@ const App = () => {
                   ) : (
                     <div className="flex flex-wrap items-center gap-3">
                       <button
+                        onClick={() =>
+                          confirmRestart('Isso vai limpar a triagem atual. Deseja iniciar outra?', () => {
+                            void recordTriageCompletion();
+                          })
+                        }
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-700 hover:to-teal-700 transition shadow-sm"
+                      >
+                        Nova triagem
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={downloadResumo}
                         className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-300 bg-red-600 text-white hover:bg-red-700 hover:shadow-sm transition"
                       >
                         <FileText className="w-4 h-4" />
                         Baixar resumo
-                      </button>
-                    <button
-                      onClick={() =>
-                        confirmRestart('Isso vai limpar a triagem atual. Deseja iniciar outra?', () => {
-                          void recordTriageCompletion();
-                        })
-                      }
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-700 hover:to-teal-700 transition shadow-sm"
-                    >
-                        Nova triagem
-                        <ArrowRight className="w-4 h-4" />
                       </button>
                     </div>
                   )}
