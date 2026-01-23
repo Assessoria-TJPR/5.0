@@ -28,6 +28,7 @@ import {
   signInWithEmailAndPassword,
   signOut,
   updateProfile,
+  type ActionCodeSettings,
   type User,
 } from 'firebase/auth';
 import {
@@ -135,6 +136,7 @@ type TriagemState = {
   guiavinc: YesNo;
   guia: YesNo;
   funjusmov: string;
+  funjusmovComp: string;
   funjusProc: ProcCheck;
   guiorig: YesNo;
   comp: YesNo;
@@ -242,6 +244,7 @@ const initialState: TriagemState = {
   guiorig: '',
   comp: '',
   funjusmov: '',
+  funjusmovComp: '',
   funjusProc: '',
   comptipo: '',
   codbar: '',
@@ -406,6 +409,9 @@ const loadStoredState = (storageKey: string): LoadedState => {
         merged.funjusmov = legacyGuia || legacyComp || '';
       }
     }
+    if (!merged.funjusmovComp) {
+      merged.funjusmovComp = merged.funjusmov || '';
+    }
     if (merged.usarIntegral === undefined) merged.usarIntegral = false;
     if (merged.consulta === '') merged.consulta = 'não';
     return { state: merged, savedAt };
@@ -494,6 +500,25 @@ const formatAuthError = (error: unknown) => {
   }
 };
 
+const getAuthActionUrl = () => {
+  const envUrl = (import.meta.env.VITE_AUTH_ACTION_URL ?? '').trim();
+  if (envUrl) return envUrl;
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  return 'https://example.com';
+};
+
+const getActionCodeSettings = (): ActionCodeSettings => {
+  const settings: ActionCodeSettings = {
+    url: getAuthActionUrl(),
+    handleCodeInApp: false,
+  };
+  const linkDomain = (import.meta.env.VITE_AUTH_LINK_DOMAIN ?? '').trim();
+  if (linkDomain) settings.linkDomain = linkDomain;
+  const dynamicLinkDomain = (import.meta.env.VITE_AUTH_DYNAMIC_LINK_DOMAIN ?? '').trim();
+  if (dynamicLinkDomain) settings.dynamicLinkDomain = dynamicLinkDomain;
+  return settings;
+};
+
 const addBusinessDays = (start: Date, days: number) => {
   if (days <= 1) return start;
   let current = start;
@@ -509,7 +534,7 @@ const computeTempestividade = (state: TriagemState): Tempestividade => {
   const envio = parseInputDate(state.envio);
   const interp = parseInputDate(state.interp);
   if (!envio || !interp) {
-    return { status: 'pendente', mensagem: 'Preencha envio da intimação e interposição.' };
+    return { status: 'pendente', mensagem: 'Use a calculadora de prazos.' };
   }
   const prazoBase = state.eca === 'sim' ? 10 : 15;
   const prazo = state.emdobro === 'em dobro' ? prazoBase * 2 : prazoBase;
@@ -561,7 +586,7 @@ const formatResumoMov = (value: string) => {
 const formatTempestivoResumo = (status: Tempestividade['status']) => {
   if (status === 'tempestivo') return 'Sim';
   if (status === 'intempestivo') return 'Não';
-  return '';
+  return 'Calculadora';
 };
 const formatMpTeorResumo = (value?: MPTeor) => {
   switch (value) {
@@ -579,7 +604,7 @@ const formatMpTeorResumo = (value?: MPTeor) => {
 };
 
 const formatDateSlash = (date?: Date) => {
-  if (!date) return '';
+  if (!date) return '—';
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const year = date.getFullYear();
@@ -593,8 +618,11 @@ const buildResumoData = (state: TriagemState, outputs: Outputs) => {
 
   const contrarraResumo = (() => {
     if (!state.contrarra) return '';
-    if (state.contrarra === 'apresentadas' || state.contrarra === 'ausente alguma') {
+    if (state.contrarra === 'apresentadas') {
       return state.contramovis.trim() ? formatResumoMov(state.contramovis) : 'Apresentadas';
+    }
+    if (state.contrarra === 'ausente alguma') {
+      return state.contramovis.trim() ? formatResumoMov(state.contramovis) : 'Ausente alguma';
     }
     if (state.contrarra === 'ausentes') {
       if (state.semadv === 'sim') return 'Sem advogado';
@@ -636,6 +664,16 @@ const buildResumoData = (state: TriagemState, outputs: Outputs) => {
     if (state.gratuidade === 'é o próprio objeto do recurso') return 'JG é objeto do recurso';
     return '';
   })();
+  const valorFJNum = Number(state.valorfj || 0);
+  const funjusBelow =
+    state.dispensa === 'não' &&
+    state.gratuidade === 'não invocada' &&
+    state.valorfj.trim() !== '' &&
+    Number.isFinite(valorFJNum) &&
+    valorFJNum < outputs.deverFJ;
+  const hasFunjusInfo = Boolean(
+    state.guia || state.comp || state.funjusmov.trim() || state.funjusmovComp.trim()
+  );
 
   const gruResumo = (() => {
     if (gratuidadeResumo) return gratuidadeResumo;
@@ -651,17 +689,26 @@ const buildResumoData = (state: TriagemState, outputs: Outputs) => {
 
   const funjusResumo = (() => {
     if (gratuidadeResumo) return gratuidadeResumo;
-    const mov = state.funjusmov.trim();
+    if (!funjusBelow && !hasFunjusInfo) return '';
+    const guiaMov = state.funjusmov.trim();
+    const compMov = state.funjusmovComp.trim();
     if (state.guia === 'sim' && state.comp === 'sim') {
-      return mov ? `Guia + Comp : Mov. ${mov}` : 'Guia + Comp';
+      if (guiaMov && compMov && guiaMov === compMov) {
+        return `Guia + Comp : Mov. ${guiaMov}`;
+      }
+      if (guiaMov && compMov) {
+        return `Guia ${formatResumoMov(guiaMov)}; Comp ${formatResumoMov(compMov)}`;
+      }
+      if (guiaMov || compMov) return formatResumoMov(guiaMov || compMov);
+      return 'Guia + Comp';
     }
     if (state.guia === 'sim' && state.comp === 'não') {
-      return mov ? `Guia ${formatResumoMov(mov)}; Comp ausente` : 'Guia ok; Comp ausente';
+      return guiaMov ? `Guia ${formatResumoMov(guiaMov)}; Comp ausente` : 'Guia ok; Comp ausente';
     }
     if (state.guia === 'não' && state.comp === 'sim') {
-      return mov ? `Comp ${formatResumoMov(mov)}; Guia ausente` : 'Comp ok; Guia ausente';
+      return compMov ? `Comp ${formatResumoMov(compMov)}; Guia ausente` : 'Comp ok; Guia ausente';
     }
-    if (mov) return formatResumoMov(mov);
+    if (guiaMov || compMov) return formatResumoMov(guiaMov || compMov);
     return '';
   })();
 
@@ -692,8 +739,9 @@ const buildResumoData = (state: TriagemState, outputs: Outputs) => {
 
   const obsList = [...outputs.observacoes];
   if (state.funjusObs.trim()) obsList.push(`Justificativa Funjus: ${state.funjusObs.trim()}`);
-  const obsTexto = obsList.length ? obsList.join(' | ') : '';
-  const obsCell = obsTexto ? `OBS: ${obsTexto}` : 'OBS: //';
+  const obsTexto = obsList.length ? obsList.map((item) => `• ${item}`).join('\n') : '';
+  const obsLabel = 'OBS:';
+  const obsValue = obsTexto || '//';
 
   const rows: ResumoRow[] = [
     {
@@ -707,7 +755,7 @@ const buildResumoData = (state: TriagemState, outputs: Outputs) => {
     { label: 'Procuração:', value: procuracaoResumo },
     { label: 'Exclusividade na intimação?', value: exclusResumo },
     { label: 'Decisão colegiada?', value: decisaoResumo },
-    { label: obsCell, value: obsCell },
+    { label: obsLabel, value: obsValue },
   ];
 
   return { headerLeft, headerRight, rows };
@@ -715,7 +763,25 @@ const buildResumoData = (state: TriagemState, outputs: Outputs) => {
 
 const buildResumoText = (state: TriagemState, outputs: Outputs) => {
   const { headerLeft, headerRight, rows } = buildResumoData(state, outputs);
-  return [`${headerLeft} | ${headerRight}`, ...rows.map((row) => `${row.label} | ${row.value}`)].join('\n');
+  const lines: string[] = [];
+  if (headerLeft) lines.push(headerLeft);
+  if (headerRight) lines.push(headerRight);
+  lines.push('');
+  rows.forEach((row) => {
+    const label = row.label?.trim();
+    const rawValue = row.value ?? '';
+    const value = rawValue.toString();
+    if (label) lines.push(label);
+    if (value.trim()) {
+      lines.push(value);
+    } else if (label?.toUpperCase().startsWith('OBS')) {
+      lines.push('//');
+    } else {
+      lines.push('');
+    }
+    lines.push('');
+  });
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 };
 
 const buildGratuidadeOutput = (state: TriagemState) => {
@@ -737,7 +803,7 @@ const buildGratuidadeOutput = (state: TriagemState) => {
 
 const computeOutputs = (state: TriagemState): Outputs => {
   const tempest = computeTempestividade(state);
-  const interpDate = parseInputDate(state.interp);
+  const interpDate = parseInputDate(state.interp) ?? new Date();
   const stLabel =
     state.tipo === 'Especial' ? 'STJ' : state.tipo === 'Extraordinário' ? 'STF' : 'STJ/STF';
   const stRate =
@@ -750,6 +816,16 @@ const computeOutputs = (state: TriagemState): Outputs => {
   const deverST = stRate.value;
   const deverFJ = funjusRate.value;
   const gratuidadeOutput = buildGratuidadeOutput(state);
+  const valorFJNum = Number(state.valorfj || 0);
+  const funjusBelow =
+    state.dispensa === 'não' &&
+    state.gratuidade === 'não invocada' &&
+    state.valorfj.trim() !== '' &&
+    Number.isFinite(valorFJNum) &&
+    valorFJNum < deverFJ;
+  const hasFunjusInfo = Boolean(
+    state.guia || state.comp || state.funjusmov.trim() || state.funjusmovComp.trim()
+  );
 
   const controut = (() => {
     if (state.contrarra === 'apresentadas') {
@@ -788,14 +864,30 @@ const computeOutputs = (state: TriagemState): Outputs => {
 
   const funjout = (() => {
     if (gratuidadeOutput) return gratuidadeOutput;
-    const guiaInfo = state.guia === 'sim' ? `guia mov. ${state.funjusmov || '?'}` : 'guia não localizada';
-    const compInfo = state.comp === 'sim' ? `comprovante mov. ${state.funjusmov || '?'}` : 'comprovante não localizado';
+    if (!funjusBelow && !hasFunjusInfo) return 'N/A';
+    const guiaMov = state.funjusmov?.trim();
+    const compMov = state.funjusmovComp?.trim();
+    const guiaInfo =
+      state.guia === 'sim'
+        ? `guia mov. ${guiaMov || '?'}`
+        : state.guia === 'não'
+        ? 'guia não localizada'
+        : 'guia pendente';
+    const compInfo =
+      state.comp === 'sim'
+        ? `comprovante mov. ${compMov || '?'}`
+        : state.comp === 'não'
+        ? 'comprovante não localizado'
+        : 'comprovante pendente';
     return `${guiaInfo}; ${compInfo}`;
   })();
 
   const parcialout = (() => {
+    if (!funjusBelow) return 'Não informado';
     if (!state.parcialTipo || state.parcialTipo === 'não') return 'Não informado';
-    if (state.parcialTipo === 'outros') return state.parcialOutro ? `Parcial: ${state.parcialOutro}` : 'Parcial: outros (especificar)';
+    if (state.parcialTipo === 'outros') {
+      return state.parcialOutro ? `Parcial: ${state.parcialOutro}` : 'Parcial: outros (especificar)';
+    }
     return `Parcial: ${state.parcialTipo}`;
   })();
 
@@ -932,7 +1024,6 @@ const computeOutputs = (state: TriagemState): Outputs => {
       (state.comprova === 'no dia útil seguinte ao término do prazo' && state.apos16 === 'não'));
 
   const valorSTNum = Number(state.valorst || 0);
-  const valorFJNum = Number(state.valorfj || 0);
 
   if (recodobro && (deverST || deverFJ)) {
     observacoes.push(
@@ -994,16 +1085,32 @@ const computeOutputs = (state: TriagemState): Outputs => {
   };
 };
 
+const formatCamaraLabel = (numero: string, area?: string) => {
+  const raw = numero.trim();
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return raw;
+  const areaLabel = area ? ` ${area}` : '';
+  return `${digits}ª Câmara${areaLabel}`;
+};
 const camaraLabel = (state: TriagemState) => {
   if (state.camaraArea && state.camaraNumero) {
-    return `${state.camaraArea} ${state.camaraNumero}`;
+    return formatCamaraLabel(state.camaraNumero, state.camaraArea);
   }
-  return state.camara || '—';
+  if (state.camara) {
+    const raw = state.camara;
+    const digits = raw.match(/\d+/)?.[0] ?? '';
+    const area =
+      /c[ií]vel/i.test(raw) ? 'Cível' : /crime|criminal/i.test(raw) ? 'Crime' : state.camaraArea;
+    if (digits) return formatCamaraLabel(digits, area);
+    return raw;
+  }
+  return '—';
 };
 
 const buildConsequencias = (state: TriagemState, outputs: Outputs) => {
   const list: string[] = [
-    `Tempestividade: ${outputs.tempest.status === 'tempestivo' ? 'prazo ok' : outputs.tempest.status === 'intempestivo' ? 'avaliar intempestividade' : 'preencha datas'}`,
+    `Tempestividade: ${outputs.tempest.status === 'tempestivo' ? 'prazo ok' : outputs.tempest.status === 'intempestivo' ? 'avaliar intempestividade' : 'ver calculadora'}`,
     `Preparo (${outputs.stLabel}/FUNJUS): ${outputs.grout}`,
     `Funjus: ${outputs.funjout}`,
     `Pagamento parcial: ${outputs.parcialout}`,
@@ -1034,22 +1141,10 @@ const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors 
   if (state.desist === 'sim') mark('valida', !state.valida);
   mark('sigla', !state.sigla);
 
-  mark('interp', !state.interp);
   mark('decrec', !state.decrec);
   mark('camaraArea', !state.camaraArea);
   mark('camaraNumero', !state.camaraNumero);
   mark('emaberto', state.emaberto === '');
-
-  mark('envio', !state.envio);
-  mark('consulta', state.consulta === '');
-  if (state.consulta === 'sim') mark('leitura', !state.leitura);
-  mark('emdobro', !state.emdobro);
-  const envioDate = parseInputDate(state.envio);
-  const interpDate = parseInputDate(state.interp);
-  if (interpDate && envioDate && interpDate < envioDate) {
-    errors.envio = true;
-    errors.interp = true;
-  }
 
   mark('multa', state.multa === '');
   if (state.multa === 'sim, não recolhida') mark('motivo', !state.motivo);
@@ -1072,12 +1167,6 @@ const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors 
       }
     }
   }
-  if (state.guia === 'sim') {
-    mark('guiorig', state.guiorig === '');
-  }
-  if (state.dispensa !== 'sim' && (state.guia === 'sim' || state.comp === 'sim')) {
-    mark('funjusmov', !state.funjusmov);
-  }
   if (
     state.dispensa === 'não' &&
     state.gratuidade === 'não invocada' &&
@@ -1091,13 +1180,6 @@ const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors 
       mark('gruProc', !state.gruProc);
     }
   }
-  if (state.comp === 'sim') {
-    mark('comptipo', !state.comptipo);
-    mark('codbar', !state.codbar);
-  }
-  if (state.guia === 'sim') {
-    mark('funjusProc', !state.funjusProc);
-  }
   const valorFJValue = state.valorfj.trim();
   const valorFJNum = Number(valorFJValue || 0);
   const funjusBelow =
@@ -1106,6 +1188,18 @@ const computeFieldErrors = (state: TriagemState, outputs: Outputs): FieldErrors 
     valorFJValue !== '' &&
     Number.isFinite(valorFJNum) &&
     valorFJNum < outputs.deverFJ;
+  if (funjusBelow) {
+    if (state.guia === 'sim') {
+      mark('funjusmov', !state.funjusmov.trim());
+      mark('guiorig', state.guiorig === '');
+      mark('funjusProc', !state.funjusProc);
+    }
+    if (state.comp === 'sim') {
+      mark('funjusmovComp', !state.funjusmovComp.trim());
+      mark('comptipo', !state.comptipo);
+      mark('codbar', !state.codbar);
+    }
+  }
   if (funjusBelow) mark('funjusObs', !state.funjusObs.trim());
 
   mark('subscritor', !state.subscritor);
@@ -1164,8 +1258,8 @@ const steps: { id: StepId; label: string; icon: typeof FileText }[] = [
 
 const stepFields: Record<StepId, (keyof TriagemState)[]> = {
   recurso: ['tipo', 'acordo', 'valido', 'desist', 'valida', 'sigla'],
-  dados: ['interp', 'decrec', 'camaraArea', 'camaraNumero', 'emaberto'],
-  tempest: ['envio', 'consulta', 'leitura', 'emdobro'],
+  dados: ['decrec', 'camaraArea', 'camaraNumero', 'emaberto'],
+  tempest: [],
   preparo: [
     'multa',
     'motivo',
@@ -1181,6 +1275,7 @@ const stepFields: Record<StepId, (keyof TriagemState)[]> = {
     'grumov',
     'gruProc',
     'funjusmov',
+    'funjusmovComp',
     'guia',
     'guiorig',
     'comp',
@@ -1224,6 +1319,86 @@ const InputLabel = ({ label, children }: { label: string; children: React.ReactN
     {children}
   </label>
 );
+
+const YesNoCheckbox = ({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: YesNo;
+  onChange: (value: YesNo) => void;
+  disabled?: boolean;
+}) => (
+  <div className="flex flex-wrap items-center gap-4">
+    <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+      <input
+        type="checkbox"
+        className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+        checked={value === 'sim'}
+        onChange={() => onChange(value === 'sim' ? '' : 'sim')}
+        disabled={disabled}
+      />
+      <span>Sim</span>
+    </label>
+    <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+      <input
+        type="checkbox"
+        className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+        checked={value === 'não'}
+        onChange={() => onChange(value === 'não' ? '' : 'não')}
+        disabled={disabled}
+      />
+      <span>Não</span>
+    </label>
+  </div>
+);
+
+const ChoiceCheckboxGroup = ({
+  value,
+  onChange,
+  options,
+  columns = 2,
+  allowEmpty = true,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string; disabled?: boolean }[];
+  columns?: 1 | 2 | 3;
+  allowEmpty?: boolean;
+  disabled?: boolean;
+}) => {
+  const gridClass =
+    columns === 1 ? 'grid-cols-1' : columns === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2';
+  return (
+    <div className={`grid gap-2 ${gridClass}`}>
+      {options.map((option) => {
+        const isChecked = value === option.value;
+        const isDisabled = disabled || option.disabled;
+        return (
+          <label
+            key={option.value}
+            className={`flex items-center gap-2 text-sm font-medium text-slate-600 ${
+              isDisabled ? 'opacity-60' : ''
+            }`}
+          >
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+              checked={isChecked}
+              onChange={() => {
+                if (isChecked && !allowEmpty) return;
+                onChange(isChecked ? '' : option.value);
+              }}
+              disabled={isDisabled}
+            />
+            <span>{option.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+};
 
 const SectionCard = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <div className="card-surface relative bg-white/80 backdrop-blur-xl border border-white/70 rounded-3xl p-6 shadow-[0_28px_60px_-42px_rgba(15,23,42,0.55)] overflow-hidden">
@@ -1362,6 +1537,7 @@ const App = () => {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const triageLoggedRef = useRef(false);
   const triageLogInFlightRef = useRef(false);
+  const fastTrackTriggeredRef = useRef(false);
   const autoApprovedRequestsRef = useRef<Set<string>>(new Set());
   const verificationActionRef = useRef(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -1811,7 +1987,6 @@ const App = () => {
     });
   }, [adminRequests, adminUsers, isAdmin, db]);
   const isPublicEntity = state.dispensa === 'sim';
-  const isEca = state.eca === 'sim';
   const valorFJValue = state.valorfj.trim();
   const valorFJNum = Number(valorFJValue || 0);
   const funjusBelow =
@@ -1821,20 +1996,33 @@ const App = () => {
     Number.isFinite(valorFJNum) &&
     valorFJNum < outputs.deverFJ;
   const funjusObsRequired = funjusBelow && !state.funjusObs.trim();
-  const funjusObs = state.funjusObs.trim();
+  const guiaMissing = state.guia === 'não';
+  const compMissing = state.comp === 'não';
   const currentStepId = steps[step].id;
   const currentStepErrorCount = stepErrorCounts[currentStepId] ?? 0;
+  const hasValidAgreement = state.acordo === 'sim' && state.valido === 'sim';
+  const hasValidDesistencia = state.desist === 'sim' && state.valida === 'sim';
+  const hasSfhFilter = state.sfh === 'sim';
+  const shouldFastTrack = hasValidAgreement || hasValidDesistencia || hasSfhFilter;
 
   const handleChange = <K extends keyof TriagemState>(key: K, value: TriagemState[K]) => {
     setState((prev) => {
       if (key === 'funjusmov') {
         const nextValue = String(value);
-        const mark = nextValue.trim() ? 'sim' : '';
+        const nextGuia = nextValue.trim() ? 'sim' : prev.guia === 'sim' ? '' : prev.guia;
         return {
           ...prev,
-          [key]: value,
-          guia: mark,
-          comp: mark,
+          funjusmov: nextValue,
+          guia: prev.guia === 'não' ? 'não' : nextGuia,
+        };
+      }
+      if (key === 'funjusmovComp') {
+        const nextValue = String(value);
+        const nextComp = nextValue.trim() ? 'sim' : prev.comp === 'sim' ? '' : prev.comp;
+        return {
+          ...prev,
+          funjusmovComp: nextValue,
+          comp: prev.comp === 'não' ? 'não' : nextComp,
         };
       }
       if (key === 'grumov') {
@@ -1919,6 +2107,16 @@ const App = () => {
       setState((prev) => (prev.emdobro ? prev : { ...prev, emdobro: 'em dobro' }));
     }
   }, [state.emdobro, state.gratuidade, state.subscritor]);
+
+  useEffect(() => {
+    if (!shouldFastTrack) {
+      fastTrackTriggeredRef.current = false;
+      return;
+    }
+    if (fastTrackTriggeredRef.current) return;
+    fastTrackTriggeredRef.current = true;
+    setStep(steps.length - 1);
+  }, [shouldFastTrack]);
 
   useEffect(() => {
     const main = mainRef.current;
@@ -2060,7 +2258,7 @@ const App = () => {
         await updateProfile(cred.user, { displayName: authName.trim() });
       }
       try {
-        await sendEmailVerification(cred.user);
+        await sendEmailVerification(cred.user, getActionCodeSettings());
       } catch (err) {
         setAuthError(formatAuthError(err));
       }
@@ -2091,7 +2289,7 @@ const App = () => {
       return;
     }
     try {
-      await sendPasswordResetEmail(auth, authEmailValue);
+      await sendPasswordResetEmail(auth, authEmailValue, getActionCodeSettings());
       setAuthMessage('Enviamos um e-mail para redefinir sua senha.');
     } catch (err) {
       setAuthError(formatAuthError(err));
@@ -2110,7 +2308,7 @@ const App = () => {
     try {
       const user = await getVerificationUser('Informe sua senha para reenviar a confirmação.');
       if (!user) return;
-      await sendEmailVerification(user);
+      await sendEmailVerification(user, getActionCodeSettings());
       setResendCooldown(15);
       setAuthMessage('E-mail de confirmação reenviado.');
     } catch (err) {
@@ -2241,7 +2439,7 @@ const App = () => {
     }
     setAdminNotice('');
     try {
-      await sendPasswordResetEmail(auth, email);
+      await sendPasswordResetEmail(auth, email, getActionCodeSettings());
       setAdminNotice(`E-mail de redefinição enviado para ${email}.`);
     } catch (err) {
       setAdminNotice(formatAuthError(err));
@@ -2395,7 +2593,7 @@ const App = () => {
     if (!auth || !authUser?.email) return;
     setProfileNotice('');
     try {
-      await sendPasswordResetEmail(auth, authUser.email);
+      await sendPasswordResetEmail(auth, authUser.email, getActionCodeSettings());
       setProfileNotice('Enviamos um e-mail para redefinir sua senha.');
     } catch (err) {
       setProfileNotice(formatAuthError(err));
@@ -2614,7 +2812,13 @@ const App = () => {
     }
   };
 
-  const next = () => setStep((s) => Math.min(steps.length - 1, s + 1));
+  const next = () => {
+    if (shouldFastTrack) {
+      setStep(steps.length - 1);
+      return;
+    }
+    setStep((s) => Math.min(steps.length - 1, s + 1));
+  };
   const prev = () => setStep((s) => Math.max(0, s - 1));
   const clearStorage = (targetKey = storageKey) => {
     try {
@@ -2627,6 +2831,7 @@ const App = () => {
     setLastSavedAt(null);
     triageLoggedRef.current = false;
     triageLogInFlightRef.current = false;
+    fastTrackTriggeredRef.current = false;
   };
   const restart = () => {
     clearStorage();
@@ -2885,15 +3090,17 @@ const App = () => {
               </InputLabel>
             </div>
             <InputLabel label="Tema">
-              <select
-                className="input"
+              <ChoiceCheckboxGroup
                 value={theme}
-                onChange={(e) => handleThemeToggle(e.target.value as ThemeMode)}
-              >
-                <option value="system">Sistema</option>
-                <option value="light">Modo claro</option>
-                <option value="dark">Modo escuro</option>
-              </select>
+                columns={3}
+                allowEmpty={false}
+                onChange={(value) => handleThemeToggle(value as ThemeMode)}
+                options={[
+                  { value: 'system', label: 'Sistema' },
+                  { value: 'light', label: 'Modo claro' },
+                  { value: 'dark', label: 'Modo escuro' },
+                ]}
+              />
               <span className="text-xs text-slate-500">
                 Preferência salva neste dispositivo e no perfil.
               </span>
@@ -3111,17 +3318,16 @@ const App = () => {
                           />
                         </InputLabel>
                         <InputLabel label="Perfil">
-                          <select
-                            className="input"
+                          <ChoiceCheckboxGroup
                             value={draft.role}
+                            onChange={(value) => updateAdminDraft(user, { role: value as UserRole })}
                             disabled={disableRoleChange}
-                            onChange={(e) =>
-                              updateAdminDraft(user, { role: e.target.value as UserRole })
-                            }
-                          >
-                            <option value="user">Usuário</option>
-                            <option value="admin">Admin</option>
-                          </select>
+                            allowEmpty={false}
+                            options={[
+                              { value: 'user', label: 'Usuário' },
+                              { value: 'admin', label: 'Admin' },
+                            ]}
+                          />
                           {disableRoleChange && (
                             <span className="text-xs text-slate-500">
                               Você é o único admin ativo.
@@ -3129,14 +3335,15 @@ const App = () => {
                           )}
                         </InputLabel>
                         <InputLabel label="Status">
-                          <select
-                            className="input"
+                          <ChoiceCheckboxGroup
                             value={draft.active ? 'ativo' : 'inativo'}
-                            onChange={(e) => updateAdminDraft(user, { active: e.target.value === 'ativo' })}
-                          >
-                            <option value="ativo">Ativo</option>
-                            <option value="inativo">Desativado</option>
-                          </select>
+                            onChange={(value) => updateAdminDraft(user, { active: value === 'ativo' })}
+                            allowEmpty={false}
+                            options={[
+                              { value: 'ativo', label: 'Ativo' },
+                              { value: 'inativo', label: 'Desativado' },
+                            ]}
+                          />
                         </InputLabel>
                       </div>
                       <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -3238,15 +3445,14 @@ const App = () => {
               <SectionCard title="Triar um novo recurso">
                 <div className="grid gap-4">
                   <InputLabel label="Tipo">
-                    <select
-                      className={inputClass('tipo')}
+                    <ChoiceCheckboxGroup
                       value={state.tipo}
-                      onChange={(e) => handleChange('tipo', e.target.value as TipoRecurso)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="Especial">Especial</option>
-                      <option value="Extraordinário">Extraordinário</option>
-                    </select>
+                      onChange={(value) => handleChange('tipo', value as TipoRecurso)}
+                      options={[
+                        { value: 'Especial', label: 'Especial' },
+                        { value: 'Extraordinário', label: 'Extraordinário' },
+                      ]}
+                    />
                   </InputLabel>
                   <InputLabel label="Sigla para minutas">
                     <input
@@ -3262,53 +3468,33 @@ const App = () => {
                 </div>
                 <div className="grid gap-4">
                   <InputLabel label="Acordo">
-                    <select
-                      className={inputClass('acordo')}
+                    <YesNoCheckbox
                       value={state.acordo}
-                      onChange={(e) => handleChange('acordo', e.target.value as YesNo)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="sim">Sim</option>
-                      <option value="não">Não</option>
-                    </select>
+                      onChange={(value) => handleChange('acordo', value)}
+                    />
                   </InputLabel>
                   {state.acordo === 'sim' && (
                     <InputLabel label="Acordo válido?">
-                      <select
-                        className={inputClass('valido')}
+                      <YesNoCheckbox
                         value={state.valido}
-                        onChange={(e) => handleChange('valido', e.target.value as YesNo)}
-                      >
-                        <option value="">Selecione</option>
-                        <option value="sim">Sim</option>
-                        <option value="não">Não</option>
-                      </select>
+                        onChange={(value) => handleChange('valido', value)}
+                      />
                     </InputLabel>
                   )}
                 </div>
                 <div className="grid gap-4">
                   <InputLabel label="Desistência">
-                    <select
-                      className={inputClass('desist')}
+                    <YesNoCheckbox
                       value={state.desist}
-                      onChange={(e) => handleChange('desist', e.target.value as YesNo)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="sim">Sim</option>
-                      <option value="não">Não</option>
-                    </select>
+                      onChange={(value) => handleChange('desist', value)}
+                    />
                   </InputLabel>
                   {state.desist === 'sim' && (
                     <InputLabel label="Desistência válida?">
-                      <select
-                        className={inputClass('valida')}
+                      <YesNoCheckbox
                         value={state.valida}
-                        onChange={(e) => handleChange('valida', e.target.value as YesNo)}
-                      >
-                        <option value="">Selecione</option>
-                        <option value="sim">Sim</option>
-                        <option value="não">Não</option>
-                      </select>
+                        onChange={(value) => handleChange('valida', value)}
+                      />
                     </InputLabel>
                   )}
                 </div>
@@ -3333,39 +3519,27 @@ const App = () => {
             <div className="grid lg:grid-cols-2 gap-4">
               <SectionCard title="Dados iniciais">
                 <div className="grid gap-4">
-                  <InputLabel label="Interposição (data)">
-                    <input
-                      type="date"
-                      className={inputClass('interp')}
-                      value={state.interp}
-                      onChange={(e) => handleChange('interp', e.target.value)}
-                    />
-                  </InputLabel>
                   <InputLabel label="Decisão recorrida">
-                    <select
-                      className={inputClass('decrec')}
+                    <ChoiceCheckboxGroup
                       value={state.decrec}
-                      onChange={(e) =>
-                        handleChange('decrec', e.target.value as TriagemState['decrec'])
-                      }
-                    >
-                      <option value="">Selecione</option>
-                      <option value="colegiada/acórdão">colegiada/acórdão</option>
-                      <option value="monocrática/singular">Monocrática/singular</option>
-                    </select>
+                      onChange={(value) => handleChange('decrec', value as TriagemState['decrec'])}
+                      options={[
+                        { value: 'colegiada/acórdão', label: 'colegiada/acórdão' },
+                        { value: 'monocrática/singular', label: 'Monocrática/singular' },
+                      ]}
+                    />
                   </InputLabel>
                 </div>
                 <div className="grid gap-4">
                   <InputLabel label="Câmara (ramo)">
-                    <select
-                      className={inputClass('camaraArea')}
+                    <ChoiceCheckboxGroup
                       value={state.camaraArea}
-                      onChange={(e) => handleChange('camaraArea', e.target.value as CamaraArea)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="Cível">Cível</option>
-                      <option value="Crime">Crime</option>
-                    </select>
+                      onChange={(value) => handleChange('camaraArea', value as CamaraArea)}
+                      options={[
+                        { value: 'Cível', label: 'Cível' },
+                        { value: 'Crime', label: 'Crime' },
+                      ]}
+                    />
                   </InputLabel>
                   <InputLabel label="Número da Câmara">
                     <input
@@ -3378,25 +3552,16 @@ const App = () => {
                     />
                   </InputLabel>
                   <InputLabel label="Prazo em aberto na origem?">
-                    <select
-                      className={inputClass('emaberto')}
+                    <YesNoCheckbox
                       value={state.emaberto}
-                      onChange={(e) => handleChange('emaberto', e.target.value as YesNo)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="sim">Sim</option>
-                      <option value="não">Não</option>
-                    </select>
+                      onChange={(value) => handleChange('emaberto', value)}
+                    />
                   </InputLabel>
                   <InputLabel label="SFH pós 24/03/2024 (filtro específico)?">
-                    <select
-                      className={inputClass('sfh')}
+                    <YesNoCheckbox
                       value={state.sfh}
-                      onChange={(e) => handleChange('sfh', e.target.value as YesNo)}
-                    >
-                      <option value="não">Não</option>
-                      <option value="sim">Sim</option>
-                    </select>
+                      onChange={(value) => handleChange('sfh', value)}
+                    />
                   </InputLabel>
                 </div>
               </SectionCard>
@@ -3410,123 +3575,19 @@ const App = () => {
           );
         case 'tempest':
           return (
-            <div className="grid lg:grid-cols-2 gap-4">
-              <SectionCard title="Tempestividade">
-                <div className="grid gap-4">
-                  <InputLabel label="Envio (expedição) da intimação">
-                    <input
-                      type="date"
-                      className={inputClass('envio')}
-                      value={state.envio}
-                      onChange={(e) => handleChange('envio', e.target.value)}
-                    />
-                  </InputLabel>
-                  <InputLabel label="Consulta eletrônica (leitura)">
-                    <select
-                      className={inputClass('consulta')}
-                      value={state.consulta}
-                      onChange={(e) => handleChange('consulta', e.target.value as YesNo)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="sim">Sim</option>
-                      <option value="não">Não</option>
-                    </select>
-                  </InputLabel>
-                  {state.consulta === 'sim' && (
-                    <InputLabel label="Data da leitura">
-                      <input
-                        type="date"
-                        className={inputClass('leitura')}
-                        value={state.leitura}
-                        onChange={(e) => handleChange('leitura', e.target.value)}
-                      />
-                    </InputLabel>
-                  )}
-                  <InputLabel label="Regime do prazo">
-                    <select
-                      className={inputClass('eca')}
-                      value={state.eca}
-                      onChange={(e) => handleChange('eca', e.target.value as YesNo)}
-                    >
-                      <option value="não">CPC (dias úteis)</option>
-                      <option value="sim">ECA (dias corridos)</option>
-                    </select>
-                  </InputLabel>
-                  <InputLabel label="Prazo">
-                    <select
-                      className={inputClass('emdobro')}
-                      value={state.emdobro}
-                      disabled={isPublicEntity}
-                      onChange={(e) => handleChange('emdobro', e.target.value as TriagemState['emdobro'])}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="simples">{isEca ? 'Simples (10 dias corridos)' : 'Simples (15 dias úteis)'}</option>
-                      <option value="em dobro">{isEca ? 'Em dobro (20 dias corridos)' : 'Em dobro (30 dias úteis)'}</option>
-                    </select>
-                  </InputLabel>
-                  {isPublicEntity && (
-                    <p className="text-xs text-slate-500">
-                      Órgão público informado: prazo em dobro aplicado automaticamente.
-                    </p>
-                  )}
-                  <p className="md:col-span-2 text-xs text-slate-500">
-                    Use prazo em dobro apenas para Defensoria Pública, MP, NPJ, dativo ou ente público.
-                  </p>
-                </div>
-                <div className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-4">
-                  <p className="text-sm text-slate-600 mb-2">Resultado parcial</p>
-                  {outputs.tempest.status === 'pendente' ? (
-                    <div className="text-sm text-slate-500">{outputs.tempest.mensagem}</div>
-                  ) : (
-                    <div className="grid md:grid-cols-2 gap-2 text-sm text-slate-800">
-                      <div>
-                        <strong>Intimação:</strong> {formatDate(outputs.tempest.intim)}
-                      </div>
-                      <div>
-                        <strong>Começo do prazo:</strong> {formatDate(outputs.tempest.comeco)}
-                      </div>
-                      <div>
-                        <strong>Prazo:</strong>{' '}
-                        {outputs.tempest.prazo} dias {outputs.tempest.prazoTipo ?? ''}
-                      </div>
-                      <div>
-                        <strong>Vencimento:</strong> {formatDate(outputs.tempest.venc)}
-                      </div>
-                      <div className="col-span-full flex items-center gap-2 text-sm">
-                        {outputs.tempest.status === 'tempestivo' ? (
-                          <CheckCircle2 className="w-4 h-4 text-green-600" />
-                        ) : (
-                          <AlertTriangle className="w-4 h-4 text-amber-500" />
-                        )}
-                        <span className="font-semibold uppercase tracking-tight">
-                          {outputs.tempest.status}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <a
-                    href="https://assessoria-tjpr.github.io/prazos.tjpr.p-sep-ar.interno/"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-600 text-white hover:bg-red-700 hover:shadow-sm transition"
-                  >
-                    Abrir calculadora de prazos
-                    <ArrowRight className="w-4 h-4" />
-                  </a>
-                </div>
-              </SectionCard>
-              <SectionCard title="Critérios usados">
-                <ul className="space-y-2 text-sm text-slate-600">
-                  <li>• Intimação presumida 10 dias após expedição (após vinculação no DJEN), salvo leitura antes disso.</li>
-                  <li>• ECA: 10 dias corridos (20 em dobro, quando aplicável).</li>
-                  <li>• Considere feriados e decretos de suspensão comprovados no período.</li>
-                  <li>• Instabilidade do PROJUDI prorroga apenas se início ou término cair no dia.</li>
-                  <li>• Prazo em dobro: apenas Defensoria Pública, MP, NPJ, dativo ou ente público.</li>
-                </ul>
-              </SectionCard>
-            </div>
+            <SectionCard title="Tempestividade">
+              <div className="flex flex-wrap items-center gap-2">
+                <a
+                  href="https://assessoria-tjpr.github.io/prazos.tjpr.p-sep-ar.interno/"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-600 text-white hover:bg-red-700 hover:shadow-sm transition"
+                >
+                  Abrir calculadora de prazos
+                  <ArrowRight className="w-4 h-4" />
+                </a>
+              </div>
+            </SectionCard>
           );
         case 'preparo':
           return (
@@ -3534,43 +3595,34 @@ const App = () => {
               <SectionCard title="Preparo e custas">
                 <div className="grid gap-4">
                   <InputLabel label="Multa por embargos protelatórios">
-                    <select
-                      className={inputClass('multa')}
+                    <ChoiceCheckboxGroup
                       value={state.multa}
-                      onChange={(e) => handleChange('multa', e.target.value as Multa)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="não">Não</option>
-                      <option value="sim, recolhida">Sim, recolhida</option>
-                      <option value="sim, não recolhida">Sim, não recolhida</option>
-                    </select>
+                      onChange={(value) => handleChange('multa', value as Multa)}
+                      options={[
+                        { value: 'não', label: 'Não' },
+                        { value: 'sim, recolhida', label: 'Sim, recolhida' },
+                        { value: 'sim, não recolhida', label: 'Sim, não recolhida' },
+                      ]}
+                    />
                   </InputLabel>
                   {state.multa === 'sim, não recolhida' && (
                     <InputLabel label="Motivo">
-                      <select
-                        className={inputClass('motivo')}
+                      <ChoiceCheckboxGroup
                         value={state.motivo}
-                        onChange={(e) =>
-                          handleChange('motivo', e.target.value as TriagemState['motivo'])
-                        }
-                      >
-                        <option value="">Selecione</option>
-                        <option value="Fazenda Pública ou justiça gratuita">Fazenda Pública ou justiça gratuita</option>
-                        <option value="é o próprio objeto do recurso">É o próprio objeto do recurso</option>
-                        <option value="não identificado">Não identificado</option>
-                      </select>
+                        onChange={(value) => handleChange('motivo', value as TriagemState['motivo'])}
+                        options={[
+                          { value: 'Fazenda Pública ou justiça gratuita', label: 'Fazenda Pública ou justiça gratuita' },
+                          { value: 'é o próprio objeto do recurso', label: 'É o próprio objeto do recurso' },
+                          { value: 'não identificado', label: 'Não identificado' },
+                        ]}
+                      />
                     </InputLabel>
                   )}
                   <InputLabel label="Dispensa (MP/ente público/autarquia)">
-                    <select
-                      className={inputClass('dispensa')}
+                    <YesNoCheckbox
                       value={state.dispensa}
-                      onChange={(e) => handleChange('dispensa', e.target.value as YesNo)}
-                    >
-                      <option value="">Selecione</option>
-                      <option value="sim">Sim</option>
-                      <option value="não">Não</option>
-                    </select>
+                      onChange={(value) => handleChange('dispensa', value)}
+                    />
                   </InputLabel>
                   {state.dispensa === 'sim' && (
                     <p className="text-xs text-slate-500">
@@ -3580,35 +3632,31 @@ const App = () => {
                   {state.dispensa === 'não' && (
                     <>
                       <InputLabel label="Justiça gratuita">
-                        <select
-                          className={inputClass('gratuidade')}
+                        <ChoiceCheckboxGroup
                           value={state.gratuidade}
-                          onChange={(e) =>
-                            handleChange('gratuidade', e.target.value as TriagemState['gratuidade'])
+                          columns={1}
+                          onChange={(value) =>
+                            handleChange('gratuidade', value as TriagemState['gratuidade'])
                           }
-                        >
-                          <option value="">Selecione</option>
-                          <option value="não invocada">Não invocada</option>
-                          <option value="já é ou afirma ser beneficiário">Já é ou afirma ser beneficiário</option>
-                          <option value="requer no recurso em análise">Requer no recurso em análise</option>
-                          <option value="é o próprio objeto do recurso">É o próprio objeto do recurso</option>
-                          <option value="presumida (defensor público, dativo ou NPJ)">
-                            Presumida (defensor público, dativo ou NPJ)
-                          </option>
-                        </select>
+                          options={[
+                            { value: 'não invocada', label: 'Não invocada' },
+                            { value: 'já é ou afirma ser beneficiário', label: 'Já é ou afirma ser beneficiário' },
+                            { value: 'requer no recurso em análise', label: 'Requer no recurso em análise' },
+                            { value: 'é o próprio objeto do recurso', label: 'É o próprio objeto do recurso' },
+                            {
+                              value: 'presumida (defensor público, dativo ou NPJ)',
+                              label: 'Presumida (defensor público, dativo ou NPJ)',
+                            },
+                          ]}
+                        />
                       </InputLabel>
                       {state.gratuidade === 'já é ou afirma ser beneficiário' && (
                         <>
                           <InputLabel label="Deferida expressamente?">
-                            <select
-                              className={inputClass('deferida')}
+                            <YesNoCheckbox
                               value={state.deferida}
-                              onChange={(e) => handleChange('deferida', e.target.value as YesNo)}
-                            >
-                              <option value="">Selecione</option>
-                              <option value="sim">Sim</option>
-                              <option value="não">Não</option>
-                            </select>
+                              onChange={(value) => handleChange('deferida', value)}
+                            />
                           </InputLabel>
                           {state.deferida === 'sim' && (
                             <InputLabel label="Movimento (deferimento)">
@@ -3623,15 +3671,10 @@ const App = () => {
                           {state.deferida === 'não' && (
                             <>
                               <InputLabel label="Requerida anteriormente?">
-                                <select
-                                  className={inputClass('requerida')}
+                                <YesNoCheckbox
                                   value={state.requerida}
-                                  onChange={(e) => handleChange('requerida', e.target.value as YesNo)}
-                                >
-                                  <option value="">Selecione</option>
-                                  <option value="sim">Sim</option>
-                                  <option value="não">Não</option>
-                                </select>
+                                  onChange={(value) => handleChange('requerida', value)}
+                                />
                               </InputLabel>
                               {state.requerida === 'sim' && (
                                 <InputLabel label="Movimento (pedido)">
@@ -3646,50 +3689,42 @@ const App = () => {
                             </>
                           )}
                           <InputLabel label="Ato incompatível (pagamento prévio)?">
-                            <select
-                              className={inputClass('atoincomp')}
+                            <YesNoCheckbox
                               value={state.atoincomp}
-                              onChange={(e) => handleChange('atoincomp', e.target.value as YesNo)}
-                            >
-                              <option value="">Selecione</option>
-                              <option value="sim">Sim</option>
-                              <option value="não">Não</option>
-                            </select>
+                              onChange={(value) => handleChange('atoincomp', value)}
+                            />
                           </InputLabel>
                         </>
                       )}
                       {state.gratuidade === 'não invocada' && (
                         <>
                           <InputLabel label="Comprovação de preparo">
-                            <select
-                              className={inputClass('comprova')}
+                            <ChoiceCheckboxGroup
                               value={state.comprova}
-                              onChange={(e) =>
-                                handleChange('comprova', e.target.value as TriagemState['comprova'])
+                              columns={1}
+                              onChange={(value) =>
+                                handleChange('comprova', value as TriagemState['comprova'])
                               }
-                            >
-                              <option value="">Selecione</option>
-                              <option value="no prazo para interposição do recurso">
-                                No prazo para interposição do recurso
-                              </option>
-                              <option value="no dia útil seguinte ao término do prazo">
-                                No dia útil seguinte ao término do prazo
-                              </option>
-                              <option value="posteriormente">Posteriormente</option>
-                              <option value="ausente">Ausente</option>
-                            </select>
+                              options={[
+                                {
+                                  value: 'no prazo para interposição do recurso',
+                                  label: 'No prazo para interposição do recurso',
+                                },
+                                {
+                                  value: 'no dia útil seguinte ao término do prazo',
+                                  label: 'No dia útil seguinte ao término do prazo',
+                                },
+                                { value: 'posteriormente', label: 'Posteriormente' },
+                                { value: 'ausente', label: 'Ausente' },
+                              ]}
+                            />
                           </InputLabel>
                           {state.comprova === 'no dia útil seguinte ao término do prazo' && (
                             <InputLabel label="Recurso interposto no último dia, após as 16h?">
-                              <select
-                                className={inputClass('apos16')}
+                              <YesNoCheckbox
                                 value={state.apos16}
-                                onChange={(e) => handleChange('apos16', e.target.value as YesNo)}
-                              >
-                                <option value="">Selecione</option>
-                                <option value="sim">Sim</option>
-                                <option value="não">Não</option>
-                              </select>
+                                onChange={(value) => handleChange('apos16', value)}
+                              />
                             </InputLabel>
                           )}
                         </>
@@ -3701,7 +3736,7 @@ const App = () => {
               {!isPublicEntity && (
                 <SectionCard title="Documentos e valores">
                   <div className="grid gap-4 md:grid-cols-2">
-                    <InputLabel label="Movimento GRU (guia/comprovante)">
+                    <InputLabel label="Movimento GRU (guia)">
                       <input
                         className={inputClass('grumov')}
                         placeholder="Ex.: 1.2"
@@ -3709,7 +3744,7 @@ const App = () => {
                         onChange={(e) => handleChange('grumov', e.target.value)}
                       />
                     </InputLabel>
-                    <InputLabel label="Movimento GRU (auto)">
+                    <InputLabel label="Movimento GRU (comprovante)">
                       <input
                         className={inputClass('grumovComp')}
                         placeholder="Ex.: 1.2"
@@ -3719,15 +3754,14 @@ const App = () => {
                     </InputLabel>
                     {(state.grumov.trim() || state.grumovComp.trim()) && (
                       <InputLabel label="Número do processo na GRU">
-                        <select
-                          className={inputClass('gruProc')}
+                        <ChoiceCheckboxGroup
                           value={state.gruProc}
-                          onChange={(e) => handleChange('gruProc', e.target.value as ProcCheck)}
-                        >
-                          <option value="">Selecione</option>
-                          <option value="confere">Confere</option>
-                          <option value="diverge">Diverge</option>
-                        </select>
+                          onChange={(value) => handleChange('gruProc', value as ProcCheck)}
+                          options={[
+                            { value: 'confere', label: 'Confere' },
+                            { value: 'diverge', label: 'Diverge' },
+                          ]}
+                        />
                       </InputLabel>
                     )}
                     <div className="md:col-span-2">
@@ -3746,7 +3780,7 @@ const App = () => {
                             className={inputClass('valorst')}
                             type="number"
                             step="0.01"
-                            placeholder="STJ/STF"
+                            placeholder={outputs.stLabel}
                             value={state.valorst}
                             onChange={(e) => handleChange('valorst', e.target.value)}
                           />
@@ -3762,151 +3796,179 @@ const App = () => {
                       </InputLabel>
                     </div>
                     {funjusBelow && (
-                      <div className="md:col-span-2">
-                        <InputLabel label="Justificativa Funjus (valor abaixo do padrão)">
-                          <textarea
-                            className={inputClass('funjusObs', 'h-24 resize-none')}
-                            maxLength={400}
-                            placeholder="Descreva o motivo do valor menor."
-                            value={state.funjusObs}
-                            onChange={(e) => handleChange('funjusObs', e.target.value)}
-                          />
-                          {funjusObsRequired && (
-                            <span className="text-xs text-rose-600">Informe o motivo do valor menor.</span>
-                          )}
-                        </InputLabel>
-                      </div>
-                    )}
-                    <InputLabel label="Movimento FUNJUS (guia/comprovante)">
-                      <input
-                        className={inputClass('funjusmov')}
-                        placeholder="Ex.: 1.5"
-                        value={state.funjusmov}
-                        onChange={(e) => handleChange('funjusmov', e.target.value)}
-                      />
-                    </InputLabel>
-                    <InputLabel label="Juntou guia?">
-                      <select
-                        className={inputClass('guia')}
-                        value={state.guia}
-                        onChange={(e) => handleChange('guia', e.target.value as YesNo)}
-                      >
-                        <option value="">Selecione</option>
-                        <option value="sim">Sim</option>
-                        <option value="não">Não</option>
-                      </select>
-                    </InputLabel>
-                    {state.guia === 'sim' && (
                       <>
-                        <InputLabel label="Guia original para o recurso?">
-                          <select
-                            className={inputClass('guiorig')}
-                            value={state.guiorig}
-                            onChange={(e) => handleChange('guiorig', e.target.value as YesNo)}
-                          >
-                            <option value="">Selecione</option>
-                            <option value="sim">Sim</option>
-                            <option value="não">Não</option>
-                          </select>
-                        </InputLabel>
-                        <InputLabel label="Número do processo na guia">
-                          <select
-                            className={inputClass('funjusProc')}
-                            value={state.funjusProc}
-                            onChange={(e) => handleChange('funjusProc', e.target.value as ProcCheck)}
-                          >
-                            <option value="">Selecione</option>
-                            <option value="confere">Confere</option>
-                            <option value="diverge">Diverge</option>
-                          </select>
-                        </InputLabel>
-                      </>
-                    )}
-                    <InputLabel label="Juntou comprovante?">
-                      <select
-                        className={inputClass('comp')}
-                        value={state.comp}
-                        onChange={(e) => handleChange('comp', e.target.value as YesNo)}
-                      >
-                        <option value="">Selecione</option>
-                        <option value="sim">Sim</option>
-                        <option value="não">Não</option>
-                      </select>
-                    </InputLabel>
-                    {state.comp === 'sim' && (
-                      <>
-                        <InputLabel label="Tipo de comprovante">
-                          <select
-                            className={inputClass('comptipo')}
-                            value={state.comptipo}
-                            onChange={(e) =>
-                              handleChange('comptipo', e.target.value as TriagemState['comptipo'])
-                            }
-                          >
-                            <option value="">Selecione</option>
-                            <option value="de pagamento">De pagamento</option>
-                            <option value="de agendamento">De agendamento</option>
-                          </select>
-                        </InputLabel>
-                        <InputLabel label="Código de barras">
-                          <select
-                            className={inputClass('codbar')}
-                            value={state.codbar}
-                            onChange={(e) =>
-                              handleChange('codbar', e.target.value as TriagemState['codbar'])
-                            }
-                          >
-                            <option value="">Selecione</option>
-                            <option value="confere">Confere</option>
-                            <option value="diverge ou guia ausente">Diverge ou guia ausente</option>
-                          </select>
-                        </InputLabel>
-                      </>
-                    )}
-                    <div className="md:col-span-2">
-                      <InputLabel label="COHAB LD? (parcial Funjus)">
-                        <select
-                          className={inputClass('parcialTipo')}
-                          value={state.parcialTipo}
-                          onChange={(e) => handleChange('parcialTipo', e.target.value as ParcialOpcao)}
-                        >
-                          <option value="">Selecione</option>
-                          <option value="não">Não</option>
-                          <option value="JG parcial">JG parcial</option>
-                          <option value="COHAB Londrina">COHAB Londrina</option>
-                          <option value="outros">Outros (especificar)</option>
-                        </select>
-                      </InputLabel>
-                    </div>
-                    {state.parcialTipo === 'outros' && (
-                      <div className="md:col-span-2">
-                        <InputLabel label="Descrever pagamento parcial">
+                        <div className="md:col-span-2">
+                          <InputLabel label="Justificativa Funjus (valor abaixo do padrão)">
+                            <textarea
+                              className={inputClass('funjusObs', 'h-24 resize-none')}
+                              maxLength={400}
+                              placeholder="Descreva o motivo do valor menor."
+                              value={state.funjusObs}
+                              onChange={(e) => handleChange('funjusObs', e.target.value)}
+                            />
+                            {funjusObsRequired && (
+                              <span className="text-xs text-rose-600">Informe o motivo do valor menor.</span>
+                            )}
+                          </InputLabel>
+                        </div>
+                        <InputLabel label="Movimento FUNJUS (guia)">
                           <input
-                            className={inputClass('parcialOutro')}
-                            placeholder="Ex.: parcelamento, precatório, etc."
-                            value={state.parcialOutro}
-                            onChange={(e) => handleChange('parcialOutro', e.target.value)}
+                            className={inputClass('funjusmov')}
+                            placeholder="Ex.: 1.5"
+                            value={state.funjusmov}
+                            onChange={(e) => handleChange('funjusmov', e.target.value)}
+                            disabled={guiaMissing}
                           />
                         </InputLabel>
-                      </div>
+                        <InputLabel label="Movimento FUNJUS (comprovante)">
+                          <input
+                            className={inputClass('funjusmovComp')}
+                            placeholder="Ex.: 1.5"
+                            value={state.funjusmovComp}
+                            onChange={(e) => handleChange('funjusmovComp', e.target.value)}
+                            disabled={compMissing}
+                          />
+                        </InputLabel>
+                        <div className="md:col-span-2 flex flex-wrap items-center gap-4 text-xs text-slate-600">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+                              checked={guiaMissing}
+                              onChange={(e) => {
+                                const missing = e.target.checked;
+                                setState((prev) => {
+                                  if (missing) {
+                                    return {
+                                      ...prev,
+                                      guia: 'não',
+                                      funjusmov: '',
+                                      guiorig: '',
+                                      funjusProc: '',
+                                    };
+                                  }
+                                  const nextGuia = prev.funjusmov.trim() ? 'sim' : '';
+                                  return { ...prev, guia: nextGuia };
+                                });
+                              }}
+                            />
+                            <span>Faltou guia</span>
+                          </label>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-slate-300 accent-amber-500"
+                              checked={compMissing}
+                              onChange={(e) => {
+                                const missing = e.target.checked;
+                                setState((prev) => {
+                                  if (missing) {
+                                    return {
+                                      ...prev,
+                                      comp: 'não',
+                                      funjusmovComp: '',
+                                      comptipo: '',
+                                      codbar: '',
+                                    };
+                                  }
+                                  const nextComp = prev.funjusmovComp.trim() ? 'sim' : '';
+                                  return { ...prev, comp: nextComp };
+                                });
+                              }}
+                            />
+                            <span>Faltou comprovante</span>
+                          </label>
+                        </div>
+                        {state.guia === 'sim' && (
+                          <>
+                            <InputLabel label="Guia original para o recurso?">
+                              <YesNoCheckbox
+                                value={state.guiorig}
+                                onChange={(value) => handleChange('guiorig', value)}
+                              />
+                            </InputLabel>
+                            <InputLabel label="Número do processo na guia">
+                              <ChoiceCheckboxGroup
+                                value={state.funjusProc}
+                                onChange={(value) => handleChange('funjusProc', value as ProcCheck)}
+                                options={[
+                                  { value: 'confere', label: 'Confere' },
+                                  { value: 'diverge', label: 'Diverge' },
+                                ]}
+                              />
+                            </InputLabel>
+                          </>
+                        )}
+                        {state.comp === 'sim' && (
+                          <>
+                            <InputLabel label="Tipo de comprovante">
+                              <ChoiceCheckboxGroup
+                                value={state.comptipo}
+                                onChange={(value) =>
+                                  handleChange('comptipo', value as TriagemState['comptipo'])
+                                }
+                                options={[
+                                  { value: 'de pagamento', label: 'De pagamento' },
+                                  { value: 'de agendamento', label: 'De agendamento' },
+                                ]}
+                              />
+                            </InputLabel>
+                            <InputLabel label="Código de barras">
+                              <ChoiceCheckboxGroup
+                                value={state.codbar}
+                                onChange={(value) =>
+                                  handleChange('codbar', value as TriagemState['codbar'])
+                                }
+                                options={[
+                                  { value: 'confere', label: 'Confere' },
+                                  { value: 'diverge ou guia ausente', label: 'Diverge ou guia ausente' },
+                                ]}
+                              />
+                            </InputLabel>
+                          </>
+                        )}
+                        <div className="md:col-span-2">
+                          <InputLabel label="COHAB LD? (parcial Funjus)">
+                            <ChoiceCheckboxGroup
+                              value={state.parcialTipo}
+                              columns={1}
+                              onChange={(value) =>
+                                handleChange('parcialTipo', value as ParcialOpcao)
+                              }
+                              options={[
+                                { value: 'não', label: 'Não' },
+                                { value: 'JG parcial', label: 'JG parcial' },
+                                { value: 'COHAB Londrina', label: 'COHAB Londrina' },
+                                { value: 'outros', label: 'Outros (especificar)' },
+                              ]}
+                            />
+                          </InputLabel>
+                        </div>
+                        {state.parcialTipo === 'outros' && (
+                          <div className="md:col-span-2">
+                            <InputLabel label="Descrever pagamento parcial">
+                              <input
+                                className={inputClass('parcialOutro')}
+                                placeholder="Ex.: parcelamento, precatório, etc."
+                                value={state.parcialOutro}
+                                onChange={(e) => handleChange('parcialOutro', e.target.value)}
+                              />
+                            </InputLabel>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
-                  {state.interp ? (
-                    <div className="mt-4 space-y-1 text-sm text-slate-600">
-                      <div>
-                        Valores devidos agora: {outputs.stLabel} {formatCurrency(outputs.deverST)} | FUNJUS{' '}
-                        {formatCurrency(outputs.deverFJ)}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        Base aplicada: {outputs.stLabel} {formatIsoDate(outputs.stRateStart)} | FUNJUS{' '}
-                        {formatIsoDate(outputs.fjRateStart)}
-                      </div>
+                  <div className="mt-4 space-y-1 text-sm text-slate-600">
+                    <div>
+                      Valores devidos agora: {outputs.stLabel} {formatCurrency(outputs.deverST)} | FUNJUS{' '}
+                      {formatCurrency(outputs.deverFJ)}
                     </div>
-                  ) : (
-                    <div className="mt-4 text-xs text-slate-500">
-                      Informe a data de interposição para calcular as custas automaticamente.
+                    <div className="text-xs text-slate-500">
+                      Base aplicada: {outputs.stLabel} {formatIsoDate(outputs.stRateStart)} | FUNJUS{' '}
+                      {formatIsoDate(outputs.fjRateStart)}
                     </div>
-                  )}
+                  </div>
                 </SectionCard>
               )}
               {!isPublicEntity && (
@@ -3936,17 +3998,17 @@ const App = () => {
                 ) : (
                   <div className="grid gap-4">
                     <InputLabel label="Subscritor">
-                      <select
-                        className={inputClass('subscritor')}
+                      <ChoiceCheckboxGroup
                         value={state.subscritor}
-                        onChange={(e) => handleChange('subscritor', e.target.value as Subscritor)}
-                      >
-                        <option value="">Selecione</option>
-                        <option value="advogado particular">Advogado particular</option>
-                        <option value="procurador público">Procurador público</option>
-                        <option value="procurador nomeado">Procurador nomeado</option>
-                        <option value="advogado em causa própria">Advogado em causa própria</option>
-                      </select>
+                        columns={1}
+                        onChange={(value) => handleChange('subscritor', value as Subscritor)}
+                        options={[
+                          { value: 'advogado particular', label: 'Advogado particular' },
+                          { value: 'procurador público', label: 'Procurador público' },
+                          { value: 'procurador nomeado', label: 'Procurador nomeado' },
+                          { value: 'advogado em causa própria', label: 'Advogado em causa própria' },
+                        ]}
+                      />
                     </InputLabel>
                     {state.subscritor === 'procurador nomeado' && (
                       <InputLabel label="Movimento (nomeação)">
@@ -3969,31 +4031,25 @@ const App = () => {
                         />
                       </InputLabel>
                       <InputLabel label="Cadeia completa?">
-                        <select
-                          className={inputClass('cadeia')}
+                        <YesNoCheckbox
                           value={state.cadeia}
-                          onChange={(e) => handleChange('cadeia', e.target.value as YesNo)}
-                        >
-                            <option value="">Selecione</option>
-                            <option value="sim">Sim</option>
-                            <option value="não">Não</option>
-                          </select>
-                        </InputLabel>
+                          onChange={(value) => handleChange('cadeia', value)}
+                        />
+                      </InputLabel>
                       {state.cadeia === 'não' && (
                         <InputLabel label="Poderes faltantes">
-                          <select
-                            className={inputClass('faltante')}
+                          <ChoiceCheckboxGroup
                             value={state.faltante}
-                            onChange={(e) =>
-                              handleChange('faltante', e.target.value as TriagemState['faltante'])
+                            onChange={(value) =>
+                              handleChange('faltante', value as TriagemState['faltante'])
                             }
-                            >
-                              <option value="">Selecione</option>
-                              <option value="ao próprio subscritor">Ao próprio subscritor</option>
-                              <option value="a outro elo da cadeia">A outro elo da cadeia</option>
-                            </select>
-                          </InputLabel>
-                        )}
+                            options={[
+                              { value: 'ao próprio subscritor', label: 'Ao próprio subscritor' },
+                              { value: 'a outro elo da cadeia', label: 'A outro elo da cadeia' },
+                            ]}
+                          />
+                        </InputLabel>
+                      )}
                       </>
                     )}
                   </div>
@@ -4002,44 +4058,38 @@ const App = () => {
               <SectionCard title="Pedidos">
                 <div className="grid gap-4">
                   <InputLabel label="Efeito suspensivo">
-                    <select
-                      className={inputClass('suspefeito')}
+                    <ChoiceCheckboxGroup
                       value={state.suspefeito}
-                      onChange={(e) =>
-                        handleChange('suspefeito', e.target.value as TriagemState['suspefeito'])
+                      columns={1}
+                      onChange={(value) =>
+                        handleChange('suspefeito', value as TriagemState['suspefeito'])
                       }
-                    >
-                      <option value="">Selecione</option>
-                      <option value="não requerido">Não requerido</option>
-                      <option value="requerido no corpo do recurso">Requerido no corpo do recurso</option>
-                      <option value="requerido em petição apartada">Requerido em petição apartada</option>
-                    </select>
+                      options={[
+                        { value: 'não requerido', label: 'Não requerido' },
+                        { value: 'requerido no corpo do recurso', label: 'Requerido no corpo do recurso' },
+                        { value: 'requerido em petição apartada', label: 'Requerido em petição apartada' },
+                      ]}
+                    />
                   </InputLabel>
                 {state.suspefeito === 'requerido em petição apartada' && (
                   <InputLabel label="Autuado?">
-                    <select
-                      className={inputClass('autuado')}
+                    <YesNoCheckbox
                       value={state.autuado}
-                      onChange={(e) => handleChange('autuado', e.target.value as YesNo)}
-                    >
-                        <option value="">Selecione</option>
-                        <option value="sim">Sim</option>
-                        <option value="não">Não</option>
-                      </select>
-                    </InputLabel>
-                  )}
+                      onChange={(value) => handleChange('autuado', value)}
+                    />
+                  </InputLabel>
+                )}
                 <InputLabel label="Exclusividade na intimação">
-                  <select
-                    className={inputClass('exclusivi')}
+                  <ChoiceCheckboxGroup
                     value={state.exclusivi}
-                    onChange={(e) =>
-                      handleChange('exclusivi', e.target.value as TriagemState['exclusivi'])
+                    onChange={(value) =>
+                      handleChange('exclusivi', value as TriagemState['exclusivi'])
                     }
-                    >
-                      <option value="">Selecione</option>
-                      <option value="requerida">Requerida</option>
-                      <option value="não requerida">Não requerida</option>
-                    </select>
+                    options={[
+                      { value: 'requerida', label: 'Requerida' },
+                      { value: 'não requerida', label: 'Não requerida' },
+                    ]}
+                  />
                   </InputLabel>
                   {state.exclusivi === 'requerida' && (
                     <>
@@ -4052,27 +4102,17 @@ const App = () => {
                         />
                       </InputLabel>
                       <InputLabel label="Procurador já cadastrado?">
-                        <select
-                          className={inputClass('cadastrada')}
+                        <YesNoCheckbox
                           value={state.cadastrada}
-                          onChange={(e) => handleChange('cadastrada', e.target.value as YesNo)}
-                        >
-                          <option value="">Selecione</option>
-                          <option value="sim">Sim</option>
-                          <option value="não">Não</option>
-                        </select>
+                          onChange={(value) => handleChange('cadastrada', value)}
+                        />
                       </InputLabel>
                       {state.cadastrada === 'não' && (
                         <InputLabel label="Advogado regularmente constituído?">
-                          <select
-                            className={inputClass('regular')}
+                          <YesNoCheckbox
                             value={state.regular}
-                            onChange={(e) => handleChange('regular', e.target.value as YesNo)}
-                          >
-                            <option value="">Selecione</option>
-                            <option value="sim">Sim</option>
-                            <option value="não">Não</option>
-                          </select>
+                            onChange={(value) => handleChange('regular', value)}
+                          />
                         </InputLabel>
                       )}
                     </>
@@ -4082,18 +4122,17 @@ const App = () => {
               <SectionCard title="Processamento">
                 <div className="grid gap-4">
                   <InputLabel label="Contrarrazões">
-                    <select
-                      className={inputClass('contrarra')}
+                    <ChoiceCheckboxGroup
                       value={state.contrarra}
-                      onChange={(e) =>
-                        handleChange('contrarra', e.target.value as TriagemState['contrarra'])
+                      onChange={(value) =>
+                        handleChange('contrarra', value as TriagemState['contrarra'])
                       }
-                    >
-                      <option value="">Selecione</option>
-                      <option value="apresentadas">Apresentadas</option>
-                      <option value="ausente alguma">Ausente alguma</option>
-                      <option value="ausentes">Ausentes</option>
-                    </select>
+                      options={[
+                        { value: 'apresentadas', label: 'Apresentadas' },
+                        { value: 'ausente alguma', label: 'Ausente alguma' },
+                        { value: 'ausentes', label: 'Ausentes' },
+                      ]}
+                    />
                   </InputLabel>
                 {state.contrarra !== '' && state.contrarra !== 'ausentes' && (
                   <InputLabel label="Movimentos das contrarrazões/renúncia">
@@ -4108,16 +4147,11 @@ const App = () => {
                 {state.contrarra !== 'apresentadas' && (
                   <>
                     <InputLabel label="Recorrido(s) intimado(s)?">
-                      <select
-                        className={inputClass('intimado')}
+                      <YesNoCheckbox
                         value={state.intimado}
-                        onChange={(e) => handleChange('intimado', e.target.value as YesNo)}
-                      >
-                          <option value="">Selecione</option>
-                          <option value="sim">Sim</option>
-                          <option value="não">Não</option>
-                        </select>
-                      </InputLabel>
+                        onChange={(value) => handleChange('intimado', value)}
+                      />
+                    </InputLabel>
                       {state.intimado === 'sim' && (
                         <>
                         <InputLabel label="Movimento de intimação">
@@ -4129,86 +4163,61 @@ const App = () => {
                           />
                         </InputLabel>
                         <InputLabel label="Prazo em aberto para algum recorrido?">
-                          <select
-                            className={inputClass('crraberto')}
+                          <YesNoCheckbox
                             value={state.crraberto}
-                            onChange={(e) => handleChange('crraberto', e.target.value as YesNo)}
-                          >
-                              <option value="">Selecione</option>
-                              <option value="sim">Sim</option>
-                              <option value="não">Não</option>
-                            </select>
-                          </InputLabel>
+                            onChange={(value) => handleChange('crraberto', value)}
+                          />
+                        </InputLabel>
                         {state.crraberto === 'não' && (
                           <InputLabel label="Decurso certificado?">
-                            <select
-                              className={inputClass('decursocrr')}
+                            <YesNoCheckbox
                               value={state.decursocrr}
-                              onChange={(e) => handleChange('decursocrr', e.target.value as YesNo)}
-                            >
-                                <option value="">Selecione</option>
-                                <option value="sim">Sim</option>
-                                <option value="não">Não</option>
-                              </select>
-                            </InputLabel>
+                              onChange={(value) => handleChange('decursocrr', value)}
+                            />
+                          </InputLabel>
                           )}
                         </>
                       )}
                     {state.intimado === 'não' && (
                       <InputLabel label="Recorrido(s) sem advogado constituído?">
-                        <select
-                          className={inputClass('semadv')}
+                        <YesNoCheckbox
                           value={state.semadv}
-                          onChange={(e) => handleChange('semadv', e.target.value as YesNo)}
-                        >
-                            <option value="">Selecione</option>
-                            <option value="sim">Sim</option>
-                            <option value="não">Não</option>
-                          </select>
-                        </InputLabel>
+                          onChange={(value) => handleChange('semadv', value)}
+                        />
+                      </InputLabel>
                       )}
                     </>
                   )}
                 <InputLabel label="Intervenção do MP?">
-                  <select
-                    className={inputClass('emepe')}
+                  <YesNoCheckbox
                     value={state.emepe}
-                    onChange={(e) => handleChange('emepe', e.target.value as YesNo)}
-                  >
-                      <option value="">Selecione</option>
-                      <option value="sim">Sim</option>
-                      <option value="não">Não</option>
-                    </select>
-                  </InputLabel>
+                    onChange={(value) => handleChange('emepe', value)}
+                  />
+                </InputLabel>
                   {state.emepe === 'sim' && (
                     <>
                     <InputLabel label="Manifestação nos autos?">
-                      <select
-                        className={inputClass('mani')}
+                      <YesNoCheckbox
                         value={state.mani}
-                        onChange={(e) => handleChange('mani', e.target.value as YesNo)}
-                      >
-                          <option value="">Selecione</option>
-                          <option value="sim">Sim</option>
-                          <option value="não">Não</option>
-                        </select>
-                      </InputLabel>
+                        onChange={(value) => handleChange('mani', value)}
+                      />
+                    </InputLabel>
                       {state.mani === 'sim' && (
                         <>
                         <InputLabel label="Teor da manifestação">
-                          <select
-                            className={inputClass('teormani')}
+                          <ChoiceCheckboxGroup
                             value={state.teormani}
-                            onChange={(e) =>
-                              handleChange('teormani', e.target.value as TriagemState['teormani'])
+                            columns={1}
+                            onChange={(value) =>
+                              handleChange('teormani', value as TriagemState['teormani'])
                             }
-                            >
-                              <option value="">Selecione</option>
-                              <option value="mera ciência">Mera ciência</option>
-                              <option value="pela admissão">Pela admissão</option>
-                              <option value="pela inadmissão">Pela inadmissão</option>
-                              <option value="ausência de interesse">Ausência de interesse</option>
-                            </select>
+                            options={[
+                              { value: 'mera ciência', label: 'Mera ciência' },
+                              { value: 'pela admissão', label: 'Pela admissão' },
+                              { value: 'pela inadmissão', label: 'Pela inadmissão' },
+                              { value: 'ausência de interesse', label: 'Ausência de interesse' },
+                            ]}
+                          />
                           </InputLabel>
                         <InputLabel label="Movimento">
                           <input
@@ -4220,44 +4229,29 @@ const App = () => {
                         </InputLabel>
                         {state.teormani === 'mera ciência' && (
                           <InputLabel label="Decurso do prazo?">
-                            <select
-                              className={inputClass('decursomp')}
+                            <YesNoCheckbox
                               value={state.decursomp}
-                              onChange={(e) => handleChange('decursomp', e.target.value as YesNo)}
-                            >
-                                <option value="">Selecione</option>
-                                <option value="sim">Sim</option>
-                                <option value="não">Não</option>
-                              </select>
-                            </InputLabel>
+                              onChange={(value) => handleChange('decursomp', value)}
+                            />
+                          </InputLabel>
                           )}
                         </>
                       )}
                       {state.mani === 'não' && (
                         <>
                       <InputLabel label="Autos remetidos?">
-                        <select
-                          className={inputClass('remetido')}
+                        <YesNoCheckbox
                           value={state.remetido}
-                          onChange={(e) => handleChange('remetido', e.target.value as YesNo)}
-                        >
-                              <option value="">Selecione</option>
-                              <option value="sim">Sim</option>
-                              <option value="não">Não</option>
-                            </select>
-                          </InputLabel>
+                          onChange={(value) => handleChange('remetido', value)}
+                        />
+                      </InputLabel>
                         {state.remetido === 'sim' && (
                           <InputLabel label="Decurso do prazo?">
-                            <select
-                              className={inputClass('decursomp')}
+                            <YesNoCheckbox
                               value={state.decursomp}
-                              onChange={(e) => handleChange('decursomp', e.target.value as YesNo)}
-                            >
-                                <option value="">Selecione</option>
-                                <option value="sim">Sim</option>
-                                <option value="não">Não</option>
-                              </select>
-                            </InputLabel>
+                              onChange={(value) => handleChange('decursomp', value)}
+                            />
+                          </InputLabel>
                           )}
                         </>
                       )}
@@ -4273,8 +4267,15 @@ const App = () => {
               <SectionCard title="Resultado da triagem">
                 {(() => {
                   const resumo = buildResumoData(state, outputs);
-                  const renderResumoCell = (value: string) => {
-                    if (!value) return '';
+                  const renderResumoCell = (value: string, highlightEmpty = false) => {
+                    if (!value) {
+                      if (!highlightEmpty) return '';
+                      return (
+                        <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.2em] text-rose-600">
+                          Pendente
+                        </span>
+                      );
+                    }
                     const parts = value.split('\n');
                     return parts.map((line, idx) => (
                       <React.Fragment key={`${line}-${idx}`}>
@@ -4285,30 +4286,38 @@ const App = () => {
                   };
                   return (
                     <div className="space-y-3 text-sm text-slate-800">
-                      <table className="w-full border-collapse text-sm">
-                        <thead>
-                          <tr>
-                            <th className="border border-slate-200 bg-white/80 px-3 py-2 text-left font-semibold text-slate-800">
-                              {resumo.headerLeft}
-                            </th>
-                            <th className="border border-slate-200 bg-white/80 px-3 py-2 text-right font-semibold text-slate-800">
-                              {resumo.headerRight}
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {resumo.rows.map((row, idx) => (
-                            <tr key={`${row.label}-${idx}`}>
-                              <td className="border border-slate-200 px-3 py-2 font-semibold text-slate-700">
-                                {renderResumoCell(row.label)}
-                              </td>
-                              <td className="border border-slate-200 px-3 py-2 text-slate-800">
-                                {renderResumoCell(row.value)}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <div className="rounded-3xl border border-white/70 bg-gradient-to-br from-white/90 via-white/70 to-amber-50/40 p-4 shadow-[0_24px_50px_-40px_rgba(15,23,42,0.6)]">
+                        <div className="flex flex-col gap-2 border-b border-white/70 pb-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-sm font-semibold text-slate-900">{resumo.headerLeft}</div>
+                          <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
+                            {resumo.headerRight}
+                          </div>
+                        </div>
+                        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                          {resumo.rows.map((row, idx) => {
+                            const isObsRow = row.label.startsWith('OBS');
+                            return (
+                              <div
+                                key={`${row.label}-${idx}`}
+                                className={`rounded-2xl border border-slate-200/70 bg-white/80 px-4 py-3 shadow-[0_16px_36px_-30px_rgba(15,23,42,0.5)] ${
+                                  isObsRow ? 'sm:col-span-2' : ''
+                                }`}
+                              >
+                                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+                                  {renderResumoCell(row.label)}
+                                </div>
+                                <div
+                                  className={`mt-1 text-sm font-semibold text-slate-800 ${
+                                    isObsRow ? 'whitespace-pre-line text-slate-600' : ''
+                                  }`}
+                                >
+                                  {renderResumoCell(row.value, true)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   );
                 })()}
@@ -4557,8 +4566,12 @@ const App = () => {
                       onClick={next}
                       className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-slate-900 to-slate-800 text-white hover:from-slate-950 hover:to-slate-900 transition shadow-sm"
                     >
-                      Avançar
-                      <ChevronRight className="w-4 h-4" />
+                      {shouldFastTrack ? 'Finalizar triagem' : 'Avançar'}
+                      {shouldFastTrack ? (
+                        <CheckCircle2 className="w-4 h-4" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4" />
+                      )}
                     </button>
                   ) : (
                     <div className="flex flex-wrap items-center gap-3">
@@ -4591,7 +4604,7 @@ const App = () => {
                 <div className="grid gap-3">
                   <MetricCard
                     label="Tempestividade"
-                    value={outputs.tempest.status}
+                    value={outputs.tempest.status === 'pendente' ? 'calculadora' : outputs.tempest.status}
                     helper={`Vencimento: ${formatDate(outputs.tempest.venc)}`}
                     tone={tempestTone}
                   />

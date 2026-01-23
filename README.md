@@ -35,6 +35,9 @@ VITE_FIREBASE_MESSAGING_SENDER_ID=...
 VITE_FIREBASE_APP_ID=...
 VITE_ADMIN_EMAILS=admin@empresa.com
 VITE_ALLOWED_EMAIL_DOMAIN=tjpr.jus.br
+VITE_AUTH_ACTION_URL=https://seu-dominio.com
+VITE_AUTH_LINK_DOMAIN=auth.seu-dominio.com
+VITE_AUTH_DYNAMIC_LINK_DOMAIN=seu-dominio.page.link
 ```
 
 Notas:
@@ -46,6 +49,9 @@ Notas:
 - No cadastro, o Firebase envia um aviso por e-mail (use o template de verificação do Auth).
 - Login só é liberado após confirmação do e-mail.
 - Perfil permite atualizar nome, foto (URL) e preferência de tema.
+- `VITE_AUTH_ACTION_URL` deve apontar para um domínio autorizado no Firebase Auth.
+- Para melhorar a entrega dos e-mails, configure um domínio personalizado de link de ação no Firebase Auth e use `VITE_AUTH_LINK_DOMAIN`.
+- `VITE_AUTH_DYNAMIC_LINK_DOMAIN` é opcional (legado para mobile/dynamic links).
 
 Regras sugeridas (Firestore):
 
