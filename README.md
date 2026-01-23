@@ -59,33 +59,111 @@ Regras sugeridas (Firestore):
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAdmin() {
-      return request.auth != null
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    function isSignedIn() {
+      return request.auth != null;
     }
-    function isAllowedEmail() {
-      return request.auth != null
-        && request.auth.token.email.matches('.*@tjpr\\.jus\\.br$');
+    function currentUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
-    function isVerifiedEmail() {
-      return request.auth != null && request.auth.token.email_verified == true;
+    function isActiveAdmin() {
+      return isSignedIn() &&
+        currentUser().data.role == 'admin' &&
+        currentUser().data.active == true;
     }
-    function canAccess() {
-      return isAllowedEmail() && isVerifiedEmail();
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function userKeysValid() {
+      return request.resource.data.keys().hasOnly([
+        'uid',
+        'email',
+        'name',
+        'photoURL',
+        'role',
+        'active',
+        'triageCount',
+        'theme',
+        'createdAt',
+        'updatedAt',
+        'deletedAt'
+      ]);
+    }
+    function selfCreateAllowed(userId) {
+      return isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.email == request.auth.token.email &&
+        request.resource.data.role == 'user' &&
+        request.resource.data.active == true &&
+        userKeysValid();
+    }
+    function adminCreateAllowed(userId) {
+      return isActiveAdmin() &&
+        request.resource.data.uid == userId &&
+        userKeysValid();
+    }
+    function selfUpdateAllowed(userId) {
+      return isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.email == request.auth.token.email &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.active == resource.data.active &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.deletedAt == resource.data.deletedAt &&
+        userKeysValid() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'name',
+          'photoURL',
+          'theme',
+          'updatedAt',
+          'triageCount',
+          'email'
+        ]) &&
+        (
+          !request.resource.data.diff(resource.data).changedKeys().hasAny(['triageCount']) ||
+          request.resource.data.triageCount == resource.data.triageCount + 1
+        );
     }
     match /users/{userId} {
-      allow read: if request.auth != null && canAccess() && (request.auth.uid == userId || isAdmin());
-      allow create: if request.auth != null && request.auth.uid == userId && canAccess();
-      allow delete: if request.auth != null && canAccess() && (request.auth.uid == userId || isAdmin());
-      allow update: if isAdmin()
-        || (request.auth.uid == userId
-          && canAccess()
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['name', 'photoURL', 'theme', 'triageCount', 'updatedAt']));
+      allow get: if isOwner(userId) || isActiveAdmin();
+      allow list: if isActiveAdmin();
+      allow create: if adminCreateAllowed(userId) || selfCreateAllowed(userId);
+      allow update: if isActiveAdmin() || selfUpdateAllowed(userId);
+      allow delete: if isOwner(userId) || isActiveAdmin();
+    }
+    function adminRequestKeysValid() {
+      return request.resource.data.keys().hasOnly([
+        'uid',
+        'email',
+        'name',
+        'status',
+        'createdAt',
+        'updatedAt'
+      ]);
+    }
+    function selfAdminRequestAllowed(requestId) {
+      return isOwner(requestId) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        adminRequestKeysValid();
+    }
+    function adminRequestUpdateAllowed(requestId) {
+      return isOwner(requestId) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        adminRequestKeysValid() &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'email',
+          'name',
+          'status',
+          'updatedAt'
+        ]);
     }
     match /adminRequests/{requestId} {
-      allow create: if request.auth != null && canAccess() && request.auth.uid == requestId;
-      allow read: if request.auth != null && canAccess() && (isAdmin() || request.auth.uid == requestId);
-      allow update: if request.auth != null && canAccess() && (isAdmin() || request.auth.uid == requestId);
+      allow get: if isOwner(requestId) || isActiveAdmin();
+      allow list: if isActiveAdmin();
+      allow create: if selfAdminRequestAllowed(requestId);
+      allow update: if isActiveAdmin() || adminRequestUpdateAllowed(requestId);
+      allow delete: if isActiveAdmin();
     }
   }
 }
