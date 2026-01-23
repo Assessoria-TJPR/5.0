@@ -1487,7 +1487,7 @@ const StepChip = ({
 );
 
 const Watermark = () => (
-  <div className="watermark pointer-events-none fixed bottom-4 right-4 z-30 max-w-[320px] text-right text-[9px] leading-tight opacity-80">
+  <div className="watermark pointer-events-none fixed bottom-8 right-4 z-30 max-w-[320px] text-right text-[9px] leading-tight opacity-80">
     <div className="flex flex-col gap-[1px]">
       <span>Desenvolvido por :</span>
       <span className="block h-[3px]" aria-hidden="true" />
@@ -4531,7 +4531,7 @@ const App = () => {
               <Pill>Triagens: {profile.triageCount || 0}</Pill>
               {isAdmin && <Pill tone="success">Admin</Pill>}
             </div>
-            <div className="mt-4 flex items-center gap-2 overflow-x-auto pb-2" aria-label="Etapas">
+            <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Etapas">
               {steps.map((item, index) => (
                 <StepChip
                   key={item.id}
@@ -4663,6 +4663,17 @@ style.innerHTML = `
   background-size: 200% 200%;
   animation: flowDrift 18s ease-in-out infinite alternate;
   transition: background 0.35s ease;
+  overflow-x: hidden;
+}
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overflow-x: hidden;
+}
+body {
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
 }
 .page-bg ::selection {
   background: rgba(249, 115, 22, 0.18);
@@ -4871,7 +4882,7 @@ button:active {
   padding: 0.5rem 0.75rem;
   background: rgba(255, 255, 255, 0.9);
   color: #0f172a;
-  font-size: 0.875rem;
+  font-size: 16px;
   line-height: 1.4;
   min-height: 2.5rem;
   box-sizing: border-box;
