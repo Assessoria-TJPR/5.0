@@ -2126,18 +2126,15 @@ const App = () => {
     setStep(steps.length - 1);
   }, [shouldFastTrack]);
 
-  useEffect(() => {
-    const main = mainRef.current;
-    if (!main) return;
-    // Evita “travamentos” de scroll: só ajusta se o conteúdo principal
-    // não estiver totalmente visível na viewport.
-    const rect = main.getBoundingClientRect();
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-    const fullyVisible = rect.top >= 0 && rect.bottom <= viewportHeight;
-    if (fullyVisible) return;
-    const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    main.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
-  }, [step]);
+
+  const scrollMainIntoView = () => {
+    requestAnimationFrame(() => {
+      const main = mainRef.current;
+      if (!main) return;
+      const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      main.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' });
+    });
+  };
 
   const downloadResumo = () => {
     void recordTriageCompletion();
@@ -2876,11 +2873,16 @@ const App = () => {
   const next = () => {
     if (shouldFastTrack) {
       setStep(steps.length - 1);
+      scrollMainIntoView();
       return;
     }
     setStep((s) => Math.min(steps.length - 1, s + 1));
+    scrollMainIntoView();
   };
-  const prev = () => setStep((s) => Math.max(0, s - 1));
+  const prev = () => {
+    setStep((s) => Math.max(0, s - 1));
+    scrollMainIntoView();
+  };
   const clearStorage = (targetKey = storageKey) => {
     try {
       localStorage.removeItem(targetKey);
@@ -4824,7 +4826,7 @@ const App = () => {
                   label={item.label}
                   icon={item.icon}
                   active={step === index}
-                  onClick={() => setStep(index)}
+                  onClick={() => { setStep(index); scrollMainIntoView(); }}
                 />
               ))}
             </div>
@@ -4956,9 +4958,13 @@ html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
   overflow-x: hidden;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  overscroll-behavior-y: auto;
 }
 body {
   overflow-x: hidden;
+  overflow-y: visible;
   margin: 0;
   padding: 0;
 }
