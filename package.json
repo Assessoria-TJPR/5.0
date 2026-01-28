@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "postbuild": "cp docs/index.html docs/404.html",
+    "postbuild": "node -e \"require('fs').copyFileSync('docs/index.html','docs/404.html')\"",
     "preview": "vite preview",
     "test": "tsc --noEmit",
     "deploy:gh": "npm run build && gh-pages -d docs -b gh-pages"
@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.33.0",
+    "docx": "^9.5.1",
     "firebase": "^12.7.0",
     "lucide-react": "^0.417.0",
     "react": "^19.2.3",

@@ -1,6 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  AlignmentType,
+  BorderStyle,
+  Document,
+  Packer,
+  Paragraph,
+  ShadingType,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+} from 'docx';
+import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -807,6 +820,287 @@ const buildResumoText = (state: TriagemState, outputs: Outputs) => {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 };
 
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+const buildResumoHtml = (state: TriagemState, outputs: Outputs) => {
+  const { headerLeft, headerRight, rows } = buildResumoData(state, outputs);
+  const tableHeader = getResumoTableHeader(state);
+  const title = `Resumo de triagem - ${headerLeft || 'Triario'}`;
+
+  const normalizedRows = rows.map((row) => {
+    const label = (row.label ?? '').trim();
+    const rawValue = row.value ?? '';
+    const value = rawValue.toString().trim();
+    const isObs = label.toUpperCase().startsWith('OBS');
+    const finalValue = value || (isObs ? '//' : '');
+    return { label, value: finalValue, isObs };
+  });
+
+  const headerHtml = `
+    <tr class="row">
+      <th class="cell cell-header cell-left">${escapeHtml(headerLeft || '—')}</th>
+      <th class="cell cell-header cell-right">${escapeHtml(headerRight || '')}</th>
+    </tr>
+  `.trim();
+
+  const bodyHtml = normalizedRows
+    .map((row) => {
+      if (row.isObs) {
+        return `
+          <tr class="row">
+            <td class="cell cell-obs" colspan="2">${escapeHtml(`${row.label} ${row.value}`.trim())}</td>
+          </tr>
+        `.trim();
+      }
+      const valueHtml = escapeHtml(row.value).replace(/\n/g, '<br/>');
+      return `
+        <tr class="row">
+          <td class="cell cell-label">${escapeHtml(row.label)}</td>
+          <td class="cell cell-value">${valueHtml}</td>
+        </tr>
+      `.trim();
+    })
+    .join('\n');
+
+  const tableHeaderHtml = tableHeader.length
+    ? `<div class="table-kind">${tableHeader.map((l) => `<div>${escapeHtml(l)}</div>`).join('')}</div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escapeHtml(title)}</title>
+    <style>
+      :root {
+        --bg: #111827;
+        --panel: #1f2937;
+        --ink: #f8fafc;
+        --muted: rgba(248, 250, 252, 0.72);
+        --line: rgba(248, 250, 252, 0.72);
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: ui-serif, Georgia, 'Times New Roman', serif;
+      }
+      .wrap {
+        padding: 18px;
+        display: flex;
+        justify-content: center;
+      }
+      .sheet {
+        width: 820px;
+        max-width: 100%;
+      }
+      .table-kind {
+        margin: 0 0 10px 0;
+        color: var(--muted);
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        font-size: 12px;
+        line-height: 1.3;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--panel);
+        border: 3px solid var(--line);
+      }
+      .cell {
+        border: 3px solid var(--line);
+        padding: 10px 12px;
+        vertical-align: middle;
+      }
+      .cell-header {
+        font-size: 28px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+      .cell-right {
+        width: 220px;
+        text-align: center;
+        font-size: 28px;
+        font-weight: 700;
+      }
+      .cell-label {
+        width: 45%;
+        font-size: 28px;
+        font-weight: 700;
+      }
+      .cell-value {
+        font-size: 28px;
+        font-weight: 700;
+        text-align: center;
+      }
+      .cell-obs {
+        font-size: 26px;
+        font-weight: 700;
+      }
+      @media print {
+        html, body { background: white; color: black; }
+        table { background: white; border-color: #111; }
+        .cell { border-color: #111; }
+        .table-kind { color: #111; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="sheet">
+        ${tableHeaderHtml}
+        <table aria-label="Resumo de triagem">
+          <tbody>
+            ${headerHtml}
+            ${bodyHtml}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </body>
+</html>`;
+};
+
+const buildResumoDocxBlob = async (state: TriagemState, outputs: Outputs): Promise<Blob> => {
+  const { headerLeft, headerRight, rows } = buildResumoData(state, outputs);
+  const tableHeader = getResumoTableHeader(state);
+
+  type DocxAlignment = (typeof AlignmentType)[keyof typeof AlignmentType];
+
+  const BORDER_COLOR = '000000';
+  const CELL_BG = 'FFFFFF';
+  const TEXT_COLOR = '000000';
+  const BORDER_SIZE = 18; // em oitavos de ponto (aprox. 2.25pt)
+  const FONT = 'Times New Roman';
+  const SIZE_MAIN = 56; // 28pt
+  const SIZE_OBS = 52; // 26pt
+
+  const borders = {
+    top: { style: BorderStyle.SINGLE, size: BORDER_SIZE, color: BORDER_COLOR },
+    bottom: { style: BorderStyle.SINGLE, size: BORDER_SIZE, color: BORDER_COLOR },
+    left: { style: BorderStyle.SINGLE, size: BORDER_SIZE, color: BORDER_COLOR },
+    right: { style: BorderStyle.SINGLE, size: BORDER_SIZE, color: BORDER_COLOR },
+  } as const;
+
+  const makeRuns = (text: string, size: number) => [
+    new TextRun({
+      text,
+      font: FONT,
+      size,
+      color: TEXT_COLOR,
+      bold: true,
+    }),
+  ];
+
+  const makeParagraphs = (value: string, size: number, alignment?: DocxAlignment) => {
+    const parts = value.split('\n').map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0) {
+      return [new Paragraph({ children: makeRuns('', size), alignment })];
+    }
+    return parts.map(
+      (part) =>
+        new Paragraph({
+          children: makeRuns(part, size),
+          alignment,
+        })
+    );
+  };
+
+  const makeCell = (value: string, opts: { size: number; align?: DocxAlignment; colSpan?: number }) =>
+    new TableCell({
+      columnSpan: opts.colSpan,
+      shading: { type: ShadingType.CLEAR, color: 'auto', fill: CELL_BG },
+      borders,
+      width: { size: 50, type: WidthType.PERCENTAGE },
+      margins: { top: 160, bottom: 160, left: 220, right: 220 },
+      children: makeParagraphs(value, opts.size, opts.align),
+    });
+
+  const tableRows: TableRow[] = [];
+
+  // Cabeçalho (2 colunas)
+  tableRows.push(
+    new TableRow({
+      children: [
+        makeCell(headerLeft || '—', { size: SIZE_MAIN, align: AlignmentType.LEFT }),
+        makeCell(headerRight || '', { size: SIZE_MAIN, align: AlignmentType.CENTER }),
+      ],
+    })
+  );
+
+  // Linhas
+  rows.forEach((row) => {
+    const label = (row.label ?? '').trim();
+    const rawValue = (row.value ?? '').toString();
+    const isObs = label.toUpperCase().startsWith('OBS');
+    const value = rawValue.trim() || (isObs ? '//' : '');
+
+    if (isObs) {
+      tableRows.push(
+        new TableRow({
+          children: [makeCell(`${label} ${value}`.trim(), { size: SIZE_OBS, align: AlignmentType.LEFT, colSpan: 2 })],
+        })
+      );
+      return;
+    }
+
+    tableRows.push(
+      new TableRow({
+        children: [
+          makeCell(label, { size: SIZE_MAIN, align: AlignmentType.LEFT }),
+          makeCell(value, { size: SIZE_MAIN, align: AlignmentType.CENTER }),
+        ],
+      })
+    );
+  });
+
+  const table = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: tableRows,
+    borders,
+  });
+
+  const headerParagraphs = tableHeader.map(
+    (line) =>
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: line,
+            font: FONT,
+            size: 22,
+            color: '000000',
+            bold: true,
+          }),
+        ],
+        spacing: { after: 80 },
+      })
+  );
+
+  const doc = new Document({
+    sections: [
+      {
+        properties: {},
+        children: [
+          ...headerParagraphs,
+          table,
+        ],
+      },
+    ],
+  });
+
+  return await Packer.toBlob(doc);
+};
+
 const buildGratuidadeOutput = (state: TriagemState) => {
   if (state.dispensa === 'sim') {
     return 'dispensado (CPC, art. 1.007, §1º)';
@@ -1596,6 +1890,7 @@ const App = () => {
   const [deleteBusyUid, setDeleteBusyUid] = useState<string | null>(null);
   const [performanceOpen, setPerformanceOpen] = useState(false);
   const [adminSelectedUser, setAdminSelectedUser] = useState<UserProfile | null>(null);
+  const [tempestMarcacao, setTempestMarcacao] = useState<'' | 'tempestivo' | 'intempestivo'>('');
   const mainRef = useRef<HTMLElement | null>(null);
   const isAdmin = profile?.role === 'admin';
   const authEmailValue = authEmailLocal
@@ -1933,7 +2228,17 @@ const App = () => {
   const outputs = useMemo(() => computeOutputs(state), [state]);
   const consequencias = useMemo(() => buildConsequencias(state, outputs), [state, outputs]);
   const fieldErrors = useMemo(() => computeFieldErrors(state, outputs), [state, outputs]);
-  const getSummaryText = () => buildResumoText(state, outputs);
+  const outputsForResumo = useMemo<Outputs>(() => {
+    if (!tempestMarcacao) return outputs;
+    return {
+      ...outputs,
+      tempest: {
+        ...outputs.tempest,
+        status: tempestMarcacao,
+      },
+    };
+  }, [outputs, tempestMarcacao]);
+  const getSummaryText = () => buildResumoText(state, outputsForResumo);
   const stepErrorCounts = useMemo(() => {
     const counts: Record<StepId, number> = {
       recurso: 0,
@@ -2153,15 +2458,14 @@ const App = () => {
     });
   };
 
-  const downloadResumo = () => {
+  const downloadResumo = async () => {
     void recordTriageCompletion();
-    const summaryText = getSummaryText();
-    const blob = new Blob([summaryText], { type: 'text/plain' });
+    const blob = await buildResumoDocxBlob(state, outputsForResumo);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     const safeSigla = sanitizeFilename(state.sigla);
-    a.download = `resumo-triagem-${safeSigla || 'triario'}.txt`;
+    a.download = `resumo-triagem-${safeSigla || 'triario'}.docx`;
     a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
@@ -3859,6 +4163,43 @@ const App = () => {
                   <ArrowRight className="w-4 h-4" />
                 </a>
               </div>
+              <div className="mt-4 grid gap-2">
+                <p className="text-xs text-slate-500">
+                  Marcação rápida (opcional):
+                </p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      checked={
+                        tempestMarcacao === 'tempestivo' ||
+                        (tempestMarcacao === '' && outputs.tempest.status === 'tempestivo')
+                      }
+                      onChange={() =>
+                        setTempestMarcacao((prev) => (prev === 'tempestivo' ? '' : 'tempestivo'))
+                      }
+                    />
+                    Tempestivo
+                  </label>
+                  <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                      checked={
+                        tempestMarcacao === 'intempestivo' ||
+                        (tempestMarcacao === '' && outputs.tempest.status === 'intempestivo')
+                      }
+                      onChange={() =>
+                        setTempestMarcacao((prev) =>
+                          prev === 'intempestivo' ? '' : 'intempestivo'
+                        )
+                      }
+                    />
+                    Intempestivo
+                  </label>
+                </div>
+              </div>
             </SectionCard>
           );
         case 'preparo':
@@ -4538,7 +4879,7 @@ const App = () => {
             <div className="space-y-4">
               <SectionCard title="Resultado da triagem">
                 {(() => {
-                  const resumo = buildResumoData(state, outputs);
+                  const resumo = buildResumoData(state, outputsForResumo);
                   const renderResumoCell = (value: string, highlightEmpty = false) => {
                     if (!value) {
                       if (!highlightEmpty) return '';
@@ -4954,7 +5295,11 @@ const App = () => {
   );
 };
 
-const root = createRoot(document.getElementById('root')!);
+const rootEl = document.getElementById('root');
+if (!rootEl) {
+  throw new Error('Elemento #root não encontrado. Verifique se index.html contém <div id="root"></div>.');
+}
+const root = createRoot(rootEl);
 root.render(<App />);
 
 // Tailwind-like input styling via Tailwind CDN
